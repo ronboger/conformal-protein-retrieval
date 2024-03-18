@@ -21,6 +21,15 @@ def get_sims_labels(data, partial=False):
         labels += labels_to_append
     return sims, labels
 
+def get_arbitrary_attribute(data, attribute: str):
+    # get an arbitrary attribute from the data
+    attributes = []
+    for query in data:
+        attribute = query[attribute]
+        attributes += attribute.tolist()
+    return attributes
+
+    
 def get_thresh(data, alpha):
     # conformal risk control
     all_sim_exact = []
@@ -107,10 +116,23 @@ def get_isotone_regression(data):
     ir.fit(sims, labels)
     return ir
 
-def scope_hierarchical_loss(y_sccs, y_hat_sccs, slack = 0):
+def scope_hierarchical_loss(y_sccs, y_hat_sccs):
     """
     Find the common ancestor of two sets of SCCs (0 if family, 1 if superfamily, 2 if fold, 3 if class)
     """
+    y_sccs, y_hat_sccs = y_sccs.split('.'), y_hat_sccs.split('.')
+    first_non_matching_index = next((i for i, (x, y) in enumerate(zip(y_sccs, y_hat_sccs)) if x != y), len(y_sccs))
+
+    loss = len(y_sccs) - first_non_matching_index # ex if the first mismatch is at idx 2 (0-indexed), that means that the second last label (superfamily) is wrong, which is a loss of two (wrong family & superfamily)
+    exact = True if len(y_sccs) == first_non_matching_index else False
+
+    return loss, exact
+
+"""
+def scope_hierarchical_loss(y_sccs, y_hat_sccs, slack = 0):
+
+    #Find the common ancestor of two sets of SCCs (0 if family, 1 if superfamily, 2 if fold, 3 if class)
+
     # Find the common ancestor of the two sets of SCCs
     y_sccs, y_hat_sccs = y_sccs.split('.'), y_hat_sccs.split('.')
     assert len(y_sccs) == len(y_hat_sccs) == 4
@@ -126,6 +148,8 @@ def scope_hierarchical_loss(y_sccs, y_hat_sccs, slack = 0):
     loss = count - slack
     
     return loss == 0
+"""
+    
 
 def get_scope_dict(true_test_idcs, test_df, lookup_idcs, lookup_df, D, I):
     """
@@ -146,6 +170,8 @@ def get_scope_dict(true_test_idcs, test_df, lookup_idcs, lookup_df, D, I):
     """
 
     near_ids = []
+    min_sim = np.min(D)
+    max_sim = np.max(D)
 
     for i in range(len(true_test_idcs)):
         test_id = test_df.loc[true_test_idcs[i], 'sid']
@@ -159,7 +185,12 @@ def get_scope_dict(true_test_idcs, test_df, lookup_idcs, lookup_df, D, I):
         # define mask_partial as 1 for any element of loss that is <=1 (tolerate retrieving homolog with diff family but same superfamily)
         mask_partial = [l <= 1 for l in loss]
 
+        # create a row of size len(lookup_df) where each element is the sum of all entries in S_i until that index
+        sum = np.cumsum(D[i])
+        norm_sim = (D[i] - min_sim) / (max_sim - min_sim) # convert similarities into a probability space (0, 1) based on (min_sim, max_sim)
         #mask_exact = [test_sccs == lookup_df.loc[lookup_idcs[j], 'sccs'] for j in I[i]]
+
+        sum_norm_s_i = np.cumsum(norm_sim)
         near_ids.append({
             'test_id': test_id,
             'query_ids': query_ids,
@@ -168,6 +199,9 @@ def get_scope_dict(true_test_idcs, test_df, lookup_idcs, lookup_df, D, I):
             'exact': mask_exact,
             'partial': mask_partial,
             'S_i': D[i],
+            'Sum_i' : sum,
+            'Norm_S_i' : norm_sim,
+            'Sum_Norm_S_i': sum_norm_s_i,
             'I_i': I[i]
         })
     return near_ids
@@ -220,6 +254,37 @@ def load_database(lookup_database):
     index.add(lookup_database)
 
     return index
+
+def get_thresh_hierarchical(data, lambdas, alpha):
+    # get the worst case loss
+    wc_loss = max([np.sum(x['loss']) for x in data])
+    wc_loss = wc_loss / 14777
+    loss_thresh = alpha - (wc_loss - alpha)/len(data) # normalize by size of calib set
+    losses = []
+    best_lam = None
+    for lam in lambdas:
+        per_lam_loss = get_hierarchical_loss(data, lam)
+        if per_lam_loss > loss_thresh:
+            break
+        best_lam = lam
+        losses.append(per_lam_loss)
+    print("worst case loss: " + str(wc_loss))
+    print("Loss threshold: " + str(loss_thresh))
+    print("Best lambda: " + str(best_lam))
+    print("Loss of best lambda: " + str(losses[-1]))
+
+    return best_lam, losses
+
+def get_hierarchical_loss(data_, lambda_):
+    losses = []
+    for query in data_:
+        thresh_idx = query['Sum_Norm_S_i'] <= lambda_
+        if np.sum(thresh_idx) == 0:
+            loss = 0
+        else:
+            loss = np.sum(np.asarray(query['loss'])[thresh_idx]) / np.sum(thresh_idx)
+        losses.append(loss) # average over all queries
+    return np.mean(losses)
 
 
 def query(index, queries, k=10):
