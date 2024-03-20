@@ -282,7 +282,39 @@ def get_hierarchical_loss(data_, lambda_):
         if np.sum(thresh_idx) == 0:
             loss = 0
         else:
-            loss = np.sum(np.asarray(query['loss'])[thresh_idx]) / np.sum(thresh_idx)
+            loss = np.sum(np.asarray(query['loss'])[thresh_idx]) / np.sum(thresh_idx) # NOTE: have fixed denominator, but alpha has to change
+        losses.append(loss) # average over all queries
+    return np.mean(losses)
+
+
+def get_thresh_max_hierarchical(data, lambdas, alpha):
+    # get the worst case loss
+    wc_loss = 4 # in the max case, the max_loss is simply retrieving a protein with different class
+    loss_thresh = alpha - (wc_loss - alpha)/len(data) # normalize by size of calib set
+    losses = []
+    best_lam = None
+    for lam in reversed(lambdas): # start from the largest lambda since we are dealing with raw similarity scores
+        per_lam_loss = get_hierarchical_max_loss(data, lam)
+        if per_lam_loss > loss_thresh:
+            break
+        best_lam = lam
+        losses.append(per_lam_loss)
+    print("worst case loss: " + str(wc_loss))
+    print("Loss threshold: " + str(loss_thresh))
+    print("Best lambda: " + str(best_lam))
+    print("Loss of best lambda: " + str(losses[-1]))
+
+    return best_lam, losses
+
+def get_hierarchical_max_loss(data_, lambda_):
+    losses = []
+    for query in data_:
+        thresh_idx = query['S_i'] >= lambda_
+        if np.sum(thresh_idx) == 0:
+            loss = 0
+        else:
+            loss = np.max(np.asarray(query['loss'])[thresh_idx]) # monotonic loss
+            #loss = np.sum(np.asarray(query['loss'])[thresh_idx]) / np.sum(thresh_idx) # NOTE: have fixed denominator, but alpha has to change
         losses.append(loss) # average over all queries
     return np.mean(losses)
 
