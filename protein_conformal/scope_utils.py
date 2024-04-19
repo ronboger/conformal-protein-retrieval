@@ -287,14 +287,17 @@ def get_hierarchical_loss(data_, lambda_):
     return np.mean(losses)
 
 
-def get_thresh_max_hierarchical(data, lambdas, alpha):
+def get_thresh_max_hierarchical(data, lambdas, alpha, sim="cosine"):
     # get the worst case loss
     wc_loss = 4 # in the max case, the max_loss is simply retrieving a protein with different class
     loss_thresh = alpha - (wc_loss - alpha)/len(data) # normalize by size of calib set
     losses = []
     best_lam = None
-    for lam in reversed(lambdas): # start from the largest lambda since we are dealing with raw similarity scores
-        per_lam_loss = get_hierarchical_max_loss(data, lam)
+    if sim == "cosine":
+        ## reverse lambdas and return list
+        lambdas = list(reversed(lambdas))
+    for lam in lambdas: # start from the largest lambda since we are dealing with raw similarity scores
+        per_lam_loss = get_hierarchical_max_loss(data, lam, sim=sim)
         if per_lam_loss > loss_thresh:
             break
         best_lam = lam
@@ -306,10 +309,13 @@ def get_thresh_max_hierarchical(data, lambdas, alpha):
 
     return best_lam, losses
 
-def get_hierarchical_max_loss(data_, lambda_):
+def get_hierarchical_max_loss(data_, lambda_, sim="cosine"):
     losses = []
     for query in data_:
-        thresh_idx = query['S_i'] >= lambda_
+        if sim == "cosine":
+            thresh_idx = query['S_i'] >= lambda_
+        else:
+            thresh_idx = query['S_i'] <= lambda_
         if np.sum(thresh_idx) == 0:
             loss = 0
         else:
