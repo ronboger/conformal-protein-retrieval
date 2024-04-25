@@ -27,6 +27,10 @@ def get_true_labels_test(file_name, test_idx: None):
             for ec in true_ec_lst:
                 if test_idx is not None and count - 1 in test_idx:
                     all_label.add(ec)
+                elif test_idx is None: ## add all EC labels
+                    all_label.add(ec)
+                else:
+                    continue
         if header:
             header = False
     true_label = [true_label_dict[i] for i in true_label_dict.keys()]
