@@ -39,8 +39,8 @@ def get_true_labels_test(file_name, test_idx: None):
     return true_label, all_label
 
 
-def infer_conformal(train_data, test_data, thresh, report_metrics = False, 
-                 pretrained=True, model_name=None, test_idx=None, name_id="1"):    
+def infer_conformal(train_data, test_data, thresh, report_metrics=False, 
+                 pretrained=True, model_name=None, test_idx=None, name_id="1"):
     use_cuda = torch.cuda.is_available()
     device = torch.device("cuda:0" if use_cuda else "cpu")
     dtype = torch.float32

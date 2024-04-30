@@ -1,3 +1,9 @@
+scratch/
+# data/
+data/*.npy
+data/*.tsv
+data/*.pkl
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
