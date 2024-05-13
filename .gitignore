@@ -3,6 +3,8 @@ scratch/
 data/*.npy
 data/*.tsv
 data/*.pkl
+data/*.csv
+data/dali_multidomain_results_csv/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
