@@ -1,12 +1,9 @@
-<<<<<<< HEAD
-=======
 scratch/
 # data/
 data/*.npy
 data/*.tsv
 data/*.pkl
 
->>>>>>> 55804bf019051081df1543cee90ef5366e3049ae
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
