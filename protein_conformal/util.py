@@ -3,8 +3,7 @@ import numpy as np
 from scipy.stats import binom, norm
 
 
-# get similarity scores and labels for a set of proteins
-def get_sims_labels(data, partial=False):
+def get_sims_labels(data, partial=False, flatten=False):
     """
     Get the similarities and labels from the given data.
 
@@ -18,16 +17,22 @@ def get_sims_labels(data, partial=False):
     - sims: A list of similarity scores.
     - labels: A list of labels.
     """
-    sims = []
-    labels = []
-    for query in data:
-        similarity = query["S_i"]
-        sims += similarity.tolist()
-        if partial:
-            labels_to_append = np.logical_or.reduce(query["partial"], axis=1).tolist()
-        else:
-            labels_to_append = query["exact"]
-        labels += labels_to_append
+    
+    sims = np.stack([query['S_i'] for query in data], axis=0)
+    if partial:
+        labels = np.stack([np.any(query['partial'], axis=1) if isinstance(query['partial'][0], list) else query['partial'] for query in data], axis=0)
+    else:
+        labels = np.stack([query['exact'] for query in data], axis=0)
+    # sims = []
+    # labels = []
+    # for query in data:
+    #     similarity = query["S_i"]
+    #     sims += similarity.tolist()
+    #     if partial:
+    #         labels_to_append = np.logical_or.reduce(query["partial"], axis=1).tolist()
+    #     else:
+    #         labels_to_append = query["exact"]
+    #     labels += labels_to_append
     return sims, labels
 
 def get_arbitrary_attribute(data, attribute: str):
@@ -39,9 +44,28 @@ def get_arbitrary_attribute(data, attribute: str):
     return attributes
 
 
+def get_thresh_new(X, Y, alpha):
+    # conformal risk control
+    # TODO: refactor this to just take in X, Y, and alpha
+
+    # all_sim_exact = []
+    all_sim_exact = X.flatten()[Y.flatten()]
+    n = len(all_sim_exact)
+    if n > 0:
+        lhat = np.quantile(
+            all_sim_exact,
+            np.maximum(alpha - (1 - alpha) / n, 0),
+            interpolation="lower",
+        )
+    else:
+        lhat = 0
+        
+    return lhat
 
 def get_thresh(data, alpha):
     # conformal risk control
+    # TODO: refactor this to just take in X, Y, and alpha
+
     all_sim_exact = []
     for query in data:
         idx = query["exact"]
@@ -115,6 +139,20 @@ def std_loss(sims, labels, lam):
 
 
 def get_thresh_FDR(labels, sims, alpha, delta=0.5, N=5000):
+    """
+    Calculate the threshold value for controlling the False Discovery Rate (FDR) using the Local Tail Trimming (LTT) method.
+
+    Parameters:
+    - labels (numpy.ndarray): The labels of the data points.
+    - sims (numpy.ndarray): The similarity scores of the data points.
+    - alpha (float): The significance level for controlling the FDR.
+    - delta (float, optional): p-value limit. Defaults to 0.5.
+    - N (int, optional): The number of lambda values to consider. Defaults to 5000.
+
+    Returns:
+    - lhat (float): The threshold value for controlling the FDR.
+
+    """
     # FDR control with LTT
     # labels = np.stack([query['exact'] for query in data], axis=0)
     # sims = np.stack([query['S_i'] for query in data], axis=0)
@@ -134,90 +172,106 @@ def get_thresh_FDR(labels, sims, alpha, delta=0.5, N=5000):
     return lhat
 
 
-# get the isotonic regression
-def get_isotone_regression(data, partial=False):
-    sims, labels = get_sims_labels(data, partial=partial)
+def get_isotone_regression(X, y):
+    # Standard isotonic regression
     ir = IsotonicRegression(out_of_bounds="clip")
-    ir.fit(sims, labels)
+    ir.fit(X, y)
     return ir
+
+# validate lhat
+def validate_lhat(data, lhat):
+    """
+    Validates the value of lhat against the given data.
+
+    Args:
+        data (list): A list of dictionaries representing the data.
+        lhat (float): The threshold value to validate against.
+
+    Returns:
+        tuple: A tuple containing the following values:
+            - The ratio of missed exact matches to the total number of exact matches.
+            - The ratio of identified inexact matches to the total number of identified matches.
+            - The ratio of missed partial matches to the total number of partial matches.
+            - The ratio of identified partial matches to the total number of identified matches.
+    """
+    total_missed = 0 # exact hits missed
+    total_missed_partial = 0 # partial hits missed
+    total_exact = 0 # total of exact hits
+    
+    # TODO: what is the difference between these?
+    total_inexact_identified = 0
+    total_identified = 0
+    total_partial = 0 # total number of true partial hits
+    total_partial_identified = 0 # total number of partial hits >= lhat
+
+    # TODO: there's almost certainly a way to do this without looping through the data
+    for query in data:
+        idx = query['exact']
+        # if partial has multiple rows, we want to take the logical or of all of them. Otherwise just set it to the single row
+        # check if there is one or more rows
+        # query['partial'] = np.array(query['partial'])
+        if len(np.array(query['partial']).shape) > 1:
+            #TODO: should this be any or logical_or?
+            idx_partial = np.logical_or.reduce(query['partial'], axis=1)
+        else:
+            idx_partial = query['partial']
+        
+        sims = query['S_i']
+        sims_exact = sims[idx] # exact hits
+        sims_partial = sims[idx_partial] # partial hits
+        total_missed += (sims_exact < lhat).sum() # number of false negatives
+
+        # TODO: are there any divisions by zero here?
+        total_missed_partial += (sims_partial < lhat).sum() # number of false negatives for partial hits
+        total_partial_identified += (sims_partial >= lhat).sum() # number of true positives for partial hits
+        total_partial += len(sims_partial) # total number of partial hits
+
+        total_exact += len(sims_exact) # total number of exact hits
+        total_inexact_identified += (sims[~np.array(idx)] >= lhat).sum() # number of false positives
+        total_identified += (sims >= lhat).sum() # total number of true positives
+    return total_missed/total_exact, total_inexact_identified/total_identified, total_missed_partial/total_partial, total_partial_identified/total_identified
 
 
 # Simplified version of Venn Abers prediction
-def simplifed_venn_abers_prediction(calib_data, test_data_point):
+def simplifed_venn_abers_prediction(X_cal, Y_cal, test_data_point):
     """
     Perform simplified Venn Abers prediction.
 
     Args:
-        calib_data (list): List of calibration data points.
+        X_cal (numpy.ndarray): The similarity scores of the calibration data.
+        Y_cal (numpy.ndarray): The labels of the calibration data.
         test_data_point: The test data point to be predicted.
 
     Returns:
         Tuple: A tuple containing the predicted probabilities for two isotonic regressions.
     """
+    print(len(X_cal))
+    print(len(Y_cal))
+    print(X_cal.shape)
+    print(Y_cal.shape)
 
-    sims, labels = get_sims_labels(calib_data, partial=False)
-    print(sims)
-    print(labels)
-    print(len(sims))
-    print(len(labels))
-
-    sims.append(test_data_point)
-    labels.append(True)
-    print(len(sims))
-    print(len(labels))
+    # TODO: do we want this with a scalar or a vector?
+    # X_cal.append(test_data_point)
+    # Y_cal.append(True)
+    # print(len(X_cal))
+    # print(len(Y_cal))
+    X_cal = np.append(X_cal, test_data_point)
+    Y_cal = np.append(Y_cal, True)
 
     ir_0 = IsotonicRegression(out_of_bounds="clip")
     ir_1 = IsotonicRegression(out_of_bounds="clip")
 
-    ir_0.fit(sims, labels)
+    ir_0.fit(X_cal, Y_cal)
 
     # run the second isotonic regression with the last point as a false label
-    labels[-1] = False
-    ir_1.fit(sims, labels)
+    Y_cal[-1] = False
+    ir_1.fit(X_cal, Y_cal)
 
     p_0 = ir_0.predict([test_data_point])[0]
     p_1 = ir_1.predict([test_data_point])[0]
 
     return p_0, p_1
 
-
-def validate_lhat(data, lhat):
-    total_missed = 0
-    total_missed_partial = 0
-    total_exact = 0
-    total_inexact_identified = 0
-    total_identified = 0
-    total_partial = 0
-    total_partial_identified = 0
-    for query in data:
-        idx = query["exact"]
-        # if partial has multiple rows, we want to take the logical or of all of them. Otherwise just set it to the single row
-        # check if there is one or more rows
-        # query['partial'] = np.array(query['partial'])
-        if len(np.array(query["partial"]).shape) > 1:
-            idx_partial = np.logical_or.reduce(query["partial"], axis=1)
-        else:
-            idx_partial = query["partial"]
-
-        sims = query["S_i"]
-        sims_exact = sims[idx]
-        sims_partial = sims[idx_partial]
-        total_missed += (sims_exact < lhat).sum()
-
-        # TODO: are there any divisions by zero here?
-        total_missed_partial += (sims_partial < lhat).sum()
-        total_partial_identified += (sims_partial >= lhat).sum()
-        total_partial += len(sims_partial)
-
-        total_exact += len(sims_exact)
-        total_inexact_identified += (sims[~np.array(idx)] >= lhat).sum()
-        total_identified += (sims >= lhat).sum()
-    return (
-        total_missed / total_exact,
-        total_inexact_identified / total_identified,
-        total_missed_partial / total_partial,
-        total_partial_identified / total_identified,
-    )
 
 ### FAISS related functions
 def load_database(lookup_database):
