@@ -54,8 +54,8 @@ masks = torch.logical_not(torch.tensor(masks, dtype=torch.bool))[None,:]
 i = 0
 embed_all_sequences = []
 print("Starting to embed")
-while i < len(afdb_sequences): 
-    protrans_sequence = featurize_prottrans(flat_seqs[i:i+1], model, tokenizer, device)
+while i < len(afdb_sequences):
+    protrans_sequence = featurize_prottrans(afdb_sequences[i:i+1], model, tokenizer, device)
     embedded_sequence = embed_vec(protrans_sequence, model_deep, masks, device)
     embed_all_sequences.append(embedded_sequence)
     i = i + 1
