@@ -13,6 +13,8 @@ model = model.cuda()
 
 # load sequences from pa][ndas dataframe "data/new.csv" under "Sequence" column
 import pandas as pd
+
+"""
 df = pd.read_csv("data/new.csv", sep = "\t")
 new_sequences = df["Sequence"]
 
@@ -32,3 +34,12 @@ df = pd.read_csv("data/new.csv", sep = "\t")
 df["PPPL"] = pppl_new
 
 df.to_csv("data/new_w_pppl.csv", sep = "\t", index = False)
+"""
+
+df = pd.read_csv("data/split100.csv", sep = "\t")
+split100_sequences = df['Sequence']
+
+pppl_train = [calculate_pppl(model, tokenizer, seq, device) for seq in split100_sequences]
+
+df["PPPL"] = pppl_train
+df.to_csv("data/split100_w_pppl.csv", sep="\t", index = False)
