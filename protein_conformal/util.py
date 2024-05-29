@@ -3,7 +3,24 @@ import numpy as np
 from scipy.stats import binom, norm
 
 
-def get_sims_labels(data, partial=False, flatten=False):
+def read_fasta(fasta_file):
+    """Read a FASTA file and return a list of sequences and metadata"""
+    sequences = []
+    metadata = []
+    with open(fasta_file) as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith(">"):
+                metadata.append(line)
+                sequences.append("")
+            else:
+                if "*" in line:
+                    print("removing * from amino acid sequence. TODO, what are these?")
+                    line = line.replace("*", "")
+                sequences[-1] += line
+    return sequences, metadata
+
+def get_sims_labels(data, partial=False):
     """
     Get the similarities and labels from the given data.
 
@@ -18,7 +35,9 @@ def get_sims_labels(data, partial=False, flatten=False):
     - labels: A list of labels.
     """
     
+    
     sims = np.stack([query['S_i'] for query in data], axis=0)
+    # TODO: may want to just return both partial and exact labels
     if partial:
         labels = np.stack([np.any(query['partial'], axis=1) if isinstance(query['partial'][0], list) else query['partial'] for query in data], axis=0)
     else:
@@ -43,10 +62,88 @@ def get_arbitrary_attribute(data, attribute: str):
         attributes += attribute.tolist()
     return attributes
 
+def get_thresh_new_FDR(X, Y, alpha):
+    # conformal risk control
+
+    # all_sim_exact = []
+    all_sim_exact = X.flatten()[~Y.flatten()]
+    # by default this includes 10% of overall false discoveries, but it is not 10% of all total discoveries
+
+    n = len(all_sim_exact)
+    if n > 0:
+        lhat = np.quantile(
+            all_sim_exact,
+            np.maximum(alpha - (1 - alpha) / n, 0),
+            interpolation="lower",
+        )
+    else:
+        lhat = 0
+
+    return lhat
+
+# validate lhat
+def validate_lhat_new(X, Y_partial, Y_exact, lhat):
+    """
+    Validates the value of lhat against the given data.
+
+    Args:
+        data (list): A list of dictionaries representing the data.
+        lhat (float): The threshold value to validate against.
+
+    Returns:
+        tuple: A tuple containing the following values:
+            - The ratio of missed exact matches to the total number of exact matches.
+            - The ratio of identified inexact matches to the total number of identified matches.
+            - The ratio of missed partial matches to the total number of partial matches.
+            - The ratio of identified partial matches to the total number of identified matches.
+    """
+
+    print('there')
+    # X_exact = X[Y_exact].flatten()
+    # X_partial = X[Y_partial].flatten()
+    # total_missed = (X_exact < lhat).sum() # number of false negatives
+    # total_missed_partial = (X_partial < lhat).sum() # number of false negatives for partial hits
+    # total_partial_identified = (X_partial >= lhat).sum() # number of true positives for partial hits
+    # total_partial = len(X_partial) # total number of partial hits
+    # total_exact = len(X_exact) # total number of exact hits
+    # total_inexact_identified = (X[~Y_exact] >= lhat).sum() # number of false positives, also includes partial hits
+    # total_identified = (X >= lhat).sum() # total number of true positives
+    
+    # return total_missed/total_exact, total_inexact_identified/total_identified, total_missed_partial/total_partial, total_partial_identified/total_identified, total_inexact_identified/total_missed
+    
+    X_flat = X.flatten()
+    X_exact = X_flat[Y_exact.flatten()]
+    X_partial = X_flat[Y_partial.flatten()]
+    
+    # False negatives
+    total_missed = (X_exact < lhat).sum()
+    total_missed_partial = (X_partial < lhat).sum()
+    
+    # True positives
+    total_partial_identified = (X_partial >= lhat).sum()
+    total_exact_identified = (X_exact >= lhat).sum()
+    
+    # Totals
+    total_partial = len(X_partial)
+    total_exact = len(X_exact)
+    total_identified = (X_flat >= lhat).sum()
+    
+    # False positives
+    total_inexact_identified = ((X_flat >= lhat) & ~Y_exact.flatten()).sum()
+    
+    error = total_missed / total_exact if total_exact > 0 else 0
+    fraction_inexact = total_inexact_identified / total_identified if total_identified > 0 else 0
+    error_partial = total_missed_partial / total_partial if total_partial > 0 else 0
+    fraction_partial = total_partial_identified / total_identified if total_identified > 0 else 0
+
+    # False discoveries
+    total_negative = len(X_flat) - total_exact
+    fraction_negative_in_set = total_inexact_identified / total_negative if total_negative > 0 else 0
+    
+    return error, fraction_inexact, error_partial, fraction_partial, fraction_negative_in_set
 
 def get_thresh_new(X, Y, alpha):
     # conformal risk control
-    # TODO: refactor this to just take in X, Y, and alpha
 
     # all_sim_exact = []
     all_sim_exact = X.flatten()[Y.flatten()]
@@ -140,7 +237,7 @@ def std_loss(sims, labels, lam):
 
 def get_thresh_FDR(labels, sims, alpha, delta=0.5, N=5000):
     """
-    Calculate the threshold value for controlling the False Discovery Rate (FDR) using the Local Tail Trimming (LTT) method.
+    Calculate the threshold value for controlling the False Discovery Rate (FDR) using Learn then Test (LTT).
 
     Parameters:
     - labels (numpy.ndarray): The labels of the data points.
@@ -163,6 +260,9 @@ def get_thresh_FDR(labels, sims, alpha, delta=0.5, N=5000):
     stds = np.array([std_loss(sims, labels, lam) for lam in lambdas])
     # pvals = np.array( [bentkus_p_value(r,n,alpha) for r in risks] )
     pvals = np.array([clt_p_value(r, s, n, alpha) for r, s in zip(risks, stds)])
+    # TODO: do we want to use the bentkus p-value or the CLT p-value?
+    # TODO: how to handle division by zero?
+
     below = pvals <= delta
     # Pick the smallest lambda such that all lambda above it have p-value below delta
     pvals_satisfy_condition = np.array([np.all(below[i:]) for i in range(N)])
@@ -178,7 +278,7 @@ def get_isotone_regression(X, y):
     ir.fit(X, y)
     return ir
 
-# validate lhat
+
 def validate_lhat(data, lhat):
     """
     Validates the value of lhat against the given data.
@@ -233,14 +333,14 @@ def validate_lhat(data, lhat):
 
 
 # Simplified version of Venn Abers prediction
-def simplifed_venn_abers_prediction(X_cal, Y_cal, test_data_point):
+def simplifed_venn_abers_prediction(X_cal, Y_cal, X_test_data_point):
     """
     Perform simplified Venn Abers prediction.
 
     Args:
         X_cal (numpy.ndarray): The similarity scores of the calibration data.
         Y_cal (numpy.ndarray): The labels of the calibration data.
-        test_data_point: The test data point to be predicted.
+        X_test_data_point: The test data point to be predicted.
 
     Returns:
         Tuple: A tuple containing the predicted probabilities for two isotonic regressions.
@@ -251,11 +351,11 @@ def simplifed_venn_abers_prediction(X_cal, Y_cal, test_data_point):
     print(Y_cal.shape)
 
     # TODO: do we want this with a scalar or a vector?
-    # X_cal.append(test_data_point)
+    # X_cal.append(X_test_data_point)
     # Y_cal.append(True)
     # print(len(X_cal))
     # print(len(Y_cal))
-    X_cal = np.append(X_cal, test_data_point)
+    X_cal = np.append(X_cal, X_test_data_point)
     Y_cal = np.append(Y_cal, True)
 
     ir_0 = IsotonicRegression(out_of_bounds="clip")
@@ -267,8 +367,8 @@ def simplifed_venn_abers_prediction(X_cal, Y_cal, test_data_point):
     Y_cal[-1] = False
     ir_1.fit(X_cal, Y_cal)
 
-    p_0 = ir_0.predict([test_data_point])[0]
-    p_1 = ir_1.predict([test_data_point])[0]
+    p_0 = ir_0.predict([X_test_data_point])[0]
+    p_1 = ir_1.predict([X_test_data_point])[0]
 
     return p_0, p_1
 
