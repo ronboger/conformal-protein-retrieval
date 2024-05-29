@@ -2,6 +2,32 @@ from sklearn.isotonic import IsotonicRegression
 import numpy as np
 from scipy.stats import binom, norm
 
+from transformers import AutoModelForMaskedLM, AutoTokenizer
+import torch
+
+def calculate_pppl(model, tokenizer, sequence):
+    token_ids = tokenizer.encode(sequence, return_tensors='pt')
+    input_length = token_ids.size(1)
+    log_likelihood = 0.0
+
+    for i in range(input_length):
+        # Create a copy of the token IDs
+        masked_token_ids = token_ids.clone()
+        # Mask a token that we will try to predict back
+        masked_token_ids[0, i] = tokenizer.mask_token_id
+
+        with torch.no_grad():
+            output = model(masked_token_ids)
+            logit_prob = torch.nn.functional.log_softmax(output.logits, dim=-1)
+        
+        log_likelihood += logit_prob[0, i, token_ids[0, i]]
+
+    # Calculate the average log likelihood per token
+    avg_log_likelihood = log_likelihood / input_length
+
+    # Compute and return the pseudo-perplexity
+    pppl = torch.exp(-avg_log_likelihood)
+    return pppl.item()
 
 def read_fasta(fasta_file):
     """Read a FASTA file and return a list of sequences and metadata"""
