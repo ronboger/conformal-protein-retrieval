@@ -4,7 +4,16 @@ data/*.npy
 data/*.tsv
 data/*.pkl
 data/*.csv
+data/*.png
+data/*.pdf
+data/*.fasta
+data/*.npz
+data/*.npy
+data/scope_swissprot_large/
+data/afdb_swissprot_large/
 data/dali_multidomain_results_csv/
+data/dali_multidomain_results_csv_small/
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
