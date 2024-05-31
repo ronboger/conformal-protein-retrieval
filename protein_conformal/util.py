@@ -124,7 +124,7 @@ def validate_lhat_new(X, Y_partial, Y_exact, lhat):
             - The ratio of identified partial matches to the total number of identified matches.
     """
 
-    print('there')
+    # print('there')
     # X_exact = X[Y_exact].flatten()
     # X_partial = X[Y_partial].flatten()
     # total_missed = (X_exact < lhat).sum() # number of false negatives
@@ -162,11 +162,15 @@ def validate_lhat_new(X, Y_partial, Y_exact, lhat):
     error_partial = total_missed_partial / total_partial if total_partial > 0 else 0
     fraction_partial = total_partial_identified / total_identified if total_identified > 0 else 0
 
-    # False discoveries
+    # False postive rate
     total_negative = len(X_flat) - total_exact
-    fraction_negative_in_set = total_inexact_identified / total_negative if total_negative > 0 else 0
+    fpr = total_inexact_identified / total_negative if total_negative > 0 else 0
+
+    # false discovery rate
+    # total_positive = total_exact + total_inexact_identified
+    # fdr = total_inexact_identified / total_positive if total_positive > 0 else 0
     
-    return error, fraction_inexact, error_partial, fraction_partial, fraction_negative_in_set
+    return error, fraction_inexact, error_partial, fraction_partial, fpr
 
 def get_thresh_new(X, Y, alpha):
     # conformal risk control
@@ -234,6 +238,13 @@ def risk(sims, labels, lam):
     total_discoveries = np.maximum(total_discoveries, 1)
     return (false_discoveries / total_discoveries).mean()
 
+def calculate_true_positives(sims, labels, lam):
+    # TPR: Number of true matches / number of matches
+    total_matches = labels.sum(axis=1)
+    true_matches = (labels & (sims >= lam)).sum(axis=1)
+    total_matches = np.maximum(total_matches, 1)
+    return (true_matches / total_matches).mean()
+
 
 def calculate_false_negatives(sims, labels, lam):
     # FNR: Number of false non-matches / number of non-matches
@@ -279,11 +290,13 @@ def get_thresh_FDR(labels, sims, alpha, delta=0.5, N=5000):
     # FDR control with LTT
     # labels = np.stack([query['exact'] for query in data], axis=0)
     # sims = np.stack([query['S_i'] for query in data], axis=0)
-    print(f"sims.max: {sims.max()}")
+    # print(f"sims.max: {sims.max()}")
     n = len(labels)
     lambdas = np.linspace(sims.min(), sims.max(), N)
     risks = np.array([risk(sims, labels, lam) for lam in lambdas])
     stds = np.array([std_loss(sims, labels, lam) for lam in lambdas])
+    eps = 1e-6
+    stds = np.maximum(stds, eps)
     # pvals = np.array( [bentkus_p_value(r,n,alpha) for r in risks] )
     pvals = np.array([clt_p_value(r, s, n, alpha) for r, s in zip(risks, stds)])
     # TODO: do we want to use the bentkus p-value or the CLT p-value?
@@ -293,9 +306,10 @@ def get_thresh_FDR(labels, sims, alpha, delta=0.5, N=5000):
     # Pick the smallest lambda such that all lambda above it have p-value below delta
     pvals_satisfy_condition = np.array([np.all(below[i:]) for i in range(N)])
     lhat = lambdas[np.argmax(pvals_satisfy_condition)]
-    print(f"lhat: {lhat}")
-    print(f"risk: {risk(sims, labels, lhat)}")
-    return lhat
+    # print(f"lhat: {lhat}")
+    risk_fdr = risk(sims, labels, lhat)
+    # print(f"risk: {risk_fdr}")
+    return lhat, risk_fdr
 
 
 def get_isotone_regression(X, y):
@@ -371,10 +385,10 @@ def simplifed_venn_abers_prediction(X_cal, Y_cal, X_test_data_point):
     Returns:
         Tuple: A tuple containing the predicted probabilities for two isotonic regressions.
     """
-    print(len(X_cal))
-    print(len(Y_cal))
-    print(X_cal.shape)
-    print(Y_cal.shape)
+    # print(len(X_cal))
+    # print(len(Y_cal))
+    # print(X_cal.shape)
+    # print(Y_cal.shape)
 
     # TODO: do we want this with a scalar or a vector?
     # X_cal.append(X_test_data_point)
