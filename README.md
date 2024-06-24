@@ -1,6 +1,6 @@
 # Protein conformal retrieval
 
-Code and notebooks from 2024 paper on conformal retrieval with proteins
+Code and notebooks from Functional protein mining with conformal guarantees (2024)
 
 ## Installation
 
