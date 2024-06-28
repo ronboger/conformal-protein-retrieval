@@ -246,12 +246,28 @@ def calculate_true_positives(sims, labels, lam):
     return (true_matches / total_matches).mean()
 
 
+# def calculate_false_negatives(sims, labels, lam):
+#     # FNR: Number of false non-matches / number of non-matches
+#     total_non_matches = labels.sum(axis=1)
+#     false_non_matches = (labels & (sims < lam)).sum(axis=1)
+#     total_non_matches = np.maximum(total_non_matches, 1)
+#     return (false_non_matches / total_non_matches).mean()
+
 def calculate_false_negatives(sims, labels, lam):
-    # FNR: Number of false non-matches / number of non-matches
-    total_non_matches = labels.sum(axis=1)
-    false_non_matches = (labels & (sims < lam)).sum(axis=1)
-    total_non_matches = np.maximum(total_non_matches, 1)
-    return (false_non_matches / total_non_matches).mean()
+    # True positives: actual positives (labels == 1) with similarity >= threshold
+    true_positives = ((labels == 1) & (sims >= lam)).sum()
+    
+    # False negatives: actual positives (labels == 1) with similarity < threshold
+    false_negatives = ((labels == 1) & (sims < lam)).sum()
+    
+    # Total actual positives
+    total_positives = (labels == 1).sum()
+    
+    # False negative rate
+    if total_positives == 0:
+        print("No actual positives")
+        return 0
+    return false_negatives / total_positives
 
 
 def risk_no_empties(sims, labels, lam):
