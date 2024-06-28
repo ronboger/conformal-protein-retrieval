@@ -19,7 +19,8 @@ def main():
     n_calib = args.n_calib
     delta = args.delta
     # Load the data
-    data = np.load('/data/ron/protein-conformal/data/conformal_pfam_with_lookup_dataset.npy', allow_pickle=True)
+    # data = np.load('/data/ron/protein-conformal/data/conformal_pfam_with_lookup_dataset.npy', allow_pickle=True)
+    data = np.load('/data/ron/protein-conformal/data/pfam_new_proteins.npy', allow_pickle=True)
 
     risks = []
     tprs = []

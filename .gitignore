@@ -14,6 +14,7 @@ data/afdb_swissprot_large/
 data/dali_multidomain_results_csv/
 data/dali_multidomain_results_csv_small/
 figs/
+data/gene_unknown/
 
 
 # Byte-compiled / optimized / DLL files
