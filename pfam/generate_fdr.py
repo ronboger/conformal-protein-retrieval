@@ -8,6 +8,7 @@ from protein_conformal.util import *
 def main():
     parser = argparse.ArgumentParser(description='Process some integers.')
     parser.add_argument('--alpha', type=float, default=0.1, help='Alpha value for the algorithm')
+    parser.add_argument('--partial', type=bool, default=False, help='Partial hits')
     parser.add_argument('--num_trials', type=int, default=100, help='Number of trials to run')
     parser.add_argument('--n_calib', type=int, default=1000, help='Number of calibration data points')
     parser.add_argument('--delta', type=float, default=0.5, help='Delta value for the algorithm')
@@ -18,6 +19,7 @@ def main():
     num_trials = args.num_trials
     n_calib = args.n_calib
     delta = args.delta
+    partial = args.partial
     # Load the data
     # data = np.load('/data/ron/protein-conformal/data/conformal_pfam_with_lookup_dataset.npy', allow_pickle=True)
     data = np.load('/data/ron/protein-conformal/data/pfam_new_proteins.npy', allow_pickle=True)
@@ -33,8 +35,8 @@ def main():
         np.random.shuffle(data)
         cal_data = data[:n_calib]
         test_data = data[n_calib:]
-        X_cal, y_cal = get_sims_labels(cal_data, partial=False)
-        X_test, y_test_exact = get_sims_labels(test_data, partial=False)
+        X_cal, y_cal = get_sims_labels(cal_data, partial=partial)
+        X_test, y_test_exact = get_sims_labels(test_data, partial=partial)
         # sims, labels = get_sims_labels(cal_data, partial=False)
         lhat, fdr_cal = get_thresh_FDR(y_cal, X_cal, alpha, delta, N=100)
         lhats.append(lhat)
@@ -49,7 +51,7 @@ def main():
     print("Lhat: ", np.mean(lhats))
     print("FDR Cal: ", np.mean(fdr_cals))
 
-    output_file = args.output + ('_' + str(datetime.datetime.now().date()) if args.add_date else '')
+    output_file = args.output + ('_' + str(datetime.datetime.now().date()) if args.add_date else '' + '.npy')
 
     np.save(output_file, 
             {'risks': risks,

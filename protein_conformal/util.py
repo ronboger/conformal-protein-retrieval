@@ -1,12 +1,13 @@
 from sklearn.isotonic import IsotonicRegression
 import numpy as np
 from scipy.stats import binom, norm
-
+from Bio.Align import PairwiseAligner
 from transformers import AutoModelForMaskedLM, AutoTokenizer
 import torch
 
+
 def calculate_pppl(model, tokenizer, sequence):
-    token_ids = tokenizer.encode(sequence, return_tensors='pt')
+    token_ids = tokenizer.encode(sequence, return_tensors="pt")
     input_length = token_ids.size(1)
     log_likelihood = 0.0
 
@@ -19,7 +20,7 @@ def calculate_pppl(model, tokenizer, sequence):
         with torch.no_grad():
             output = model(masked_token_ids)
             logit_prob = torch.nn.functional.log_softmax(output.logits, dim=-1)
-        
+
         log_likelihood += logit_prob[0, i, token_ids[0, i]]
 
     # Calculate the average log likelihood per token
@@ -28,6 +29,7 @@ def calculate_pppl(model, tokenizer, sequence):
     # Compute and return the pseudo-perplexity
     pppl = torch.exp(-avg_log_likelihood)
     return pppl.item()
+
 
 def read_fasta(fasta_file):
     """Read a FASTA file and return a list of sequences and metadata"""
@@ -46,6 +48,30 @@ def read_fasta(fasta_file):
                 sequences[-1] += line
     return sequences, metadata
 
+
+# Define the sequence identity function using Bio.Align.PairwiseAligner
+def seq_identity(seq1, seq2):
+    """
+    Calculate the sequence identity between two sequences using pairwise alignment.
+
+    Parameters:
+    seq1 (str): First sequence
+    seq2 (str): Second sequence
+
+    Returns:
+    float: Sequence identity percentage
+    """
+    aligner = PairwiseAligner()
+    alignments = aligner.align(seq1, seq2)
+    best_alignment = alignments[0]
+    seq1_aligned, seq2_aligned = best_alignment.aligned
+
+    # Calculate identity
+    matches = sum(a == b for a, b in zip(seq1, seq2) if a == b)
+    length = max(len(seq1), len(seq2))
+    return matches / length * 100
+
+
 def get_sims_labels(data, partial=False):
     """
     Get the similarities and labels from the given data.
@@ -60,14 +86,23 @@ def get_sims_labels(data, partial=False):
     - sims: A list of similarity scores.
     - labels: A list of labels.
     """
-    
-    
-    sims = np.stack([query['S_i'] for query in data], axis=0)
+
+    sims = np.stack([query["S_i"] for query in data], axis=0)
     # TODO: may want to just return both partial and exact labels
     if partial:
-        labels = np.stack([np.any(query['partial'], axis=1) if isinstance(query['partial'][0], list) else query['partial'] for query in data], axis=0)
+        labels = np.stack(
+            [
+                (
+                    np.any(query["partial"], axis=1)
+                    if isinstance(query["partial"][0], list)
+                    else query["partial"]
+                )
+                for query in data
+            ],
+            axis=0,
+        )
     else:
-        labels = np.stack([query['exact'] for query in data], axis=0)
+        labels = np.stack([query["exact"] for query in data], axis=0)
     # sims = []
     # labels = []
     # for query in data:
@@ -80,6 +115,7 @@ def get_sims_labels(data, partial=False):
     #     labels += labels_to_append
     return sims, labels
 
+
 def get_arbitrary_attribute(data, attribute: str):
     # get an arbitrary attribute from the data
     attributes = []
@@ -87,6 +123,7 @@ def get_arbitrary_attribute(data, attribute: str):
         attribute = query[attribute]
         attributes += attribute.tolist()
     return attributes
+
 
 def get_thresh_new_FDR(X, Y, alpha):
     # conformal risk control
@@ -106,6 +143,7 @@ def get_thresh_new_FDR(X, Y, alpha):
         lhat = 0
 
     return lhat
+
 
 # validate lhat
 def validate_lhat_new(X, Y_partial, Y_exact, lhat):
@@ -134,33 +172,37 @@ def validate_lhat_new(X, Y_partial, Y_exact, lhat):
     # total_exact = len(X_exact) # total number of exact hits
     # total_inexact_identified = (X[~Y_exact] >= lhat).sum() # number of false positives, also includes partial hits
     # total_identified = (X >= lhat).sum() # total number of true positives
-    
+
     # return total_missed/total_exact, total_inexact_identified/total_identified, total_missed_partial/total_partial, total_partial_identified/total_identified, total_inexact_identified/total_missed
-    
+
     X_flat = X.flatten()
     X_exact = X_flat[Y_exact.flatten()]
     X_partial = X_flat[Y_partial.flatten()]
-    
+
     # False negatives
     total_missed = (X_exact < lhat).sum()
     total_missed_partial = (X_partial < lhat).sum()
-    
+
     # True positives
     total_partial_identified = (X_partial >= lhat).sum()
     total_exact_identified = (X_exact >= lhat).sum()
-    
+
     # Totals
     total_partial = len(X_partial)
     total_exact = len(X_exact)
     total_identified = (X_flat >= lhat).sum()
-    
+
     # False positives
     total_inexact_identified = ((X_flat >= lhat) & ~Y_exact.flatten()).sum()
-    
+
     error = total_missed / total_exact if total_exact > 0 else 0
-    fraction_inexact = total_inexact_identified / total_identified if total_identified > 0 else 0
+    fraction_inexact = (
+        total_inexact_identified / total_identified if total_identified > 0 else 0
+    )
     error_partial = total_missed_partial / total_partial if total_partial > 0 else 0
-    fraction_partial = total_partial_identified / total_identified if total_identified > 0 else 0
+    fraction_partial = (
+        total_partial_identified / total_identified if total_identified > 0 else 0
+    )
 
     # False postive rate
     total_negative = len(X_flat) - total_exact
@@ -169,8 +211,9 @@ def validate_lhat_new(X, Y_partial, Y_exact, lhat):
     # false discovery rate
     # total_positive = total_exact + total_inexact_identified
     # fdr = total_inexact_identified / total_positive if total_positive > 0 else 0
-    
+
     return error, fraction_inexact, error_partial, fraction_partial, fpr
+
 
 def get_thresh_new(X, Y, alpha):
     # conformal risk control
@@ -186,8 +229,9 @@ def get_thresh_new(X, Y, alpha):
         )
     else:
         lhat = 0
-        
+
     return lhat
+
 
 def get_thresh(data, alpha):
     # conformal risk control
@@ -219,6 +263,7 @@ def bentkus_p_value(r_hat, n, alpha):
 # def clt_p_value(r_hat,n,alpha):
 # TODO: we may have wanted to do a different implementation of this
 
+
 def clt_p_value(r_hat, std_hat, n, alpha):
     z = (r_hat - alpha) / (std_hat / np.sqrt(n))
     p_value = norm.cdf(z)
@@ -231,12 +276,22 @@ def percentage_of_discoveries(sims, labels, lam):
     return total_discoveries.mean() / len(labels)  # or sims.shape[1]
 
 
+def risk_1d(sims, labels, lam):
+    # FDR: Number of false matches / number of matches
+    total_discoveries = (sims >= lam).sum()
+    false_discoveries = ((1 - labels) * (sims >= lam)).sum()
+    total_discoveries = np.maximum(total_discoveries, 1)
+    fdr = false_discoveries / total_discoveries
+    return fdr
+
+
 def risk(sims, labels, lam):
     # FDR: Number of false matches / number of matches
     total_discoveries = (sims >= lam).sum(axis=1)
     false_discoveries = ((1 - labels) * (sims >= lam)).sum(axis=1)
     total_discoveries = np.maximum(total_discoveries, 1)
     return (false_discoveries / total_discoveries).mean()
+
 
 def calculate_true_positives(sims, labels, lam):
     # TPR: Number of true matches / number of matches
@@ -253,16 +308,17 @@ def calculate_true_positives(sims, labels, lam):
 #     total_non_matches = np.maximum(total_non_matches, 1)
 #     return (false_non_matches / total_non_matches).mean()
 
+
 def calculate_false_negatives(sims, labels, lam):
     # True positives: actual positives (labels == 1) with similarity >= threshold
     true_positives = ((labels == 1) & (sims >= lam)).sum()
-    
+
     # False negatives: actual positives (labels == 1) with similarity < threshold
     false_negatives = ((labels == 1) & (sims < lam)).sum()
-    
+
     # Total actual positives
     total_positives = (labels == 1).sum()
-    
+
     # False negative rate
     if total_positives == 0:
         print("No actual positives")
@@ -350,42 +406,53 @@ def validate_lhat(data, lhat):
             - The ratio of missed partial matches to the total number of partial matches.
             - The ratio of identified partial matches to the total number of identified matches.
     """
-    total_missed = 0 # exact hits missed
-    total_missed_partial = 0 # partial hits missed
-    total_exact = 0 # total of exact hits
-    
+    total_missed = 0  # exact hits missed
+    total_missed_partial = 0  # partial hits missed
+    total_exact = 0  # total of exact hits
+
     # TODO: what is the difference between these?
     total_inexact_identified = 0
     total_identified = 0
-    total_partial = 0 # total number of true partial hits
-    total_partial_identified = 0 # total number of partial hits >= lhat
+    total_partial = 0  # total number of true partial hits
+    total_partial_identified = 0  # total number of partial hits >= lhat
 
     # TODO: there's almost certainly a way to do this without looping through the data
     for query in data:
-        idx = query['exact']
+        idx = query["exact"]
         # if partial has multiple rows, we want to take the logical or of all of them. Otherwise just set it to the single row
         # check if there is one or more rows
         # query['partial'] = np.array(query['partial'])
-        if len(np.array(query['partial']).shape) > 1:
-            #TODO: should this be any or logical_or?
-            idx_partial = np.logical_or.reduce(query['partial'], axis=1)
+        if len(np.array(query["partial"]).shape) > 1:
+            # TODO: should this be any or logical_or?
+            idx_partial = np.logical_or.reduce(query["partial"], axis=1)
         else:
-            idx_partial = query['partial']
-        
-        sims = query['S_i']
-        sims_exact = sims[idx] # exact hits
-        sims_partial = sims[idx_partial] # partial hits
-        total_missed += (sims_exact < lhat).sum() # number of false negatives
+            idx_partial = query["partial"]
+
+        sims = query["S_i"]
+        sims_exact = sims[idx]  # exact hits
+        sims_partial = sims[idx_partial]  # partial hits
+        total_missed += (sims_exact < lhat).sum()  # number of false negatives
 
         # TODO: are there any divisions by zero here?
-        total_missed_partial += (sims_partial < lhat).sum() # number of false negatives for partial hits
-        total_partial_identified += (sims_partial >= lhat).sum() # number of true positives for partial hits
-        total_partial += len(sims_partial) # total number of partial hits
+        total_missed_partial += (
+            sims_partial < lhat
+        ).sum()  # number of false negatives for partial hits
+        total_partial_identified += (
+            sims_partial >= lhat
+        ).sum()  # number of true positives for partial hits
+        total_partial += len(sims_partial)  # total number of partial hits
 
-        total_exact += len(sims_exact) # total number of exact hits
-        total_inexact_identified += (sims[~np.array(idx)] >= lhat).sum() # number of false positives
-        total_identified += (sims >= lhat).sum() # total number of true positives
-    return total_missed/total_exact, total_inexact_identified/total_identified, total_missed_partial/total_partial, total_partial_identified/total_identified
+        total_exact += len(sims_exact)  # total number of exact hits
+        total_inexact_identified += (
+            sims[~np.array(idx)] >= lhat
+        ).sum()  # number of false positives
+        total_identified += (sims >= lhat).sum()  # total number of true positives
+    return (
+        total_missed / total_exact,
+        total_inexact_identified / total_identified,
+        total_missed_partial / total_partial,
+        total_partial_identified / total_identified,
+    )
 
 
 # Simplified version of Venn Abers prediction
@@ -456,6 +523,7 @@ def query(index, queries, k=10):
 
     return (D, I)
 
+
 ### functions for hierarchical conformal
 def build_scope_tree(list_sccs):
     """
@@ -470,6 +538,7 @@ def build_scope_tree(list_sccs):
                 node[s] = {}
             node = node[s]
     return tree
+
 
 def get_thresh_hierarchical(data, lambdas, alpha):
     # get the worst case loss
@@ -552,6 +621,7 @@ def get_hierarchical_max_loss(data_, lambda_, sim="cosine"):
         losses.append(loss)  # average over all queries
     return np.mean(losses)
 
+
 def get_scope_dict(true_test_idcs, test_df, lookup_idcs, lookup_df, D, I):
     """
     true_test_idcs: indices of the test set within the scope dataframe
@@ -614,6 +684,7 @@ def get_scope_dict(true_test_idcs, test_df, lookup_idcs, lookup_df, D, I):
         )
     return near_ids
 
+
 """
 def scope_hierarchical_loss(y_sccs, y_hat_sccs, slack = 0):
 
@@ -636,6 +707,7 @@ def scope_hierarchical_loss(y_sccs, y_hat_sccs, slack = 0):
     return loss == 0
 """
 
+
 def scope_hierarchical_loss(y_sccs, y_hat_sccs):
     """
     Find the common ancestor of two sets of SCCs (0 if family, 1 if superfamily, 2 if fold, 3 if class)
@@ -651,4 +723,3 @@ def scope_hierarchical_loss(y_sccs, y_hat_sccs):
     exact = True if len(y_sccs) == first_non_matching_index else False
 
     return loss, exact
-
