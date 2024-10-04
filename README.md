@@ -1,6 +1,6 @@
 # Protein conformal retrieval
 
-Code and notebooks from Functional protein mining with conformal guarantees (2024)
+Code and notebooks from Functional protein mining with conformal guarantees (2024). We will share a Zenodo with the preprocessed calibration datasets, embeddings and more shortly, but results are already reproducible through executing the data preparation notebooks in each of the subdirectories before running conformal protein retrieval.
 
 ## Installation
 
