@@ -56,7 +56,7 @@ def main(args):
             print("loading calibration data")
             np.random.shuffle(data)
             cal_data = data[:n_calib]
-            X_cal, y_cal = get_sims_labels(cal_data, partial=False)
+            X_cal, y_cal = get_sims_labels(cal_data, partial=True)
             X_cal = X_cal.flatten()
             y_cal = y_cal.flatten()
 
