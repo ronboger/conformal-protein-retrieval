@@ -46,7 +46,7 @@ def main(args):
     if args.partial:
         # TODO: this stage may not be necessary, but we noticed sometimes that shuffling the data would mess up the original file
         data = np.load(
-            "/groups/doudna/projects/ronb/conformal_backup/protein-conformal/data/pfam_new_proteins.npy",
+            args.cal_data,
             allow_pickle=True,
         )
         print("loading calibration data")
