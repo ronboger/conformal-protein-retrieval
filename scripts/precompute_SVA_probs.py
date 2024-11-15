@@ -3,17 +3,15 @@ import pandas as pd
 import argparse
 
 from protein_conformal.util import *
-
+import tqdm
 
 def main(args):
-    df = pd.read_csv(args.input)
-
     sim2prob = pd.DataFrame(columns=["similarity", "prob_exact", "prob_partial"])
 
     # Get a probability for each hit based on the distance using Venn-Abers / isotonic regression
     # load calibration data
     data = np.load(
-        "/groups/doudna/projects/ronb/conformal_backup/protein-conformal/data/pfam_new_proteins.npy",
+        args.cal_data,
         allow_pickle=True,
     )
     print("loading calibration data")
@@ -25,9 +23,10 @@ def main(args):
     y_cal = y_cal.flatten()
 
     print("Get probability distribution for a grid of similarity bins")
-    min_sim, max_sim = min(df["D_score"]), max(df["D_score"])
+    min_sim, max_sim = X_cal.min(), X_cal.max()
+    # create bins for similarity scores to get SVA probabilities
     bins = np.linspace(min_sim, max_sim, args.n_bins)
-    for d in bins:
+    for d in tqdm.tqdm(bins, desc="Calculating probabilities"):
         p_0, p_1 = simplifed_venn_abers_prediction(X_cal, y_cal, d)
         sim2prob = sim2prob.append(
             {
@@ -36,6 +35,13 @@ def main(args):
             },
             ignore_index=True,
         )
+
+    # save the probabilities for the exact hits, then calculate the probabilities for partial hits
+    print("saving df exact probabilities")
+    sim2prob.to_csv(
+        args.output,
+        index=False,
+    )
 
     if args.partial:
         # TODO: this stage may not be necessary, but we noticed sometimes that shuffling the data would mess up the original file
@@ -52,7 +58,7 @@ def main(args):
         y_cal = y_cal.flatten()
 
         print("getting partial probabilities")
-        for i, d in enumerate(bins):
+        for i, d in tqdm.tqdm(enumerate(bins), desc="Calculating partial probabilities", total=len(bins)):
             p_0, p_1 = simplifed_venn_abers_prediction(X_cal, y_cal, d)
             # add to column "prob_partial" for the row with the appropriate similarity score bin, i
             sim2prob.loc[i, "prob_partial"] = np.mean([p_0, p_1])
@@ -67,10 +73,9 @@ def parse_args():
     parser = argparse.ArgumentParser("Get probabilities for similarity score distribution of a given dataset, so its precomputed")
   
     parser.add_argument(
-        "--input",
+        "--cal_data",
         type=str,
-        default="/groups/doudna/projects/ronb/conformal_backup/results_no_probs.csv",
-        help="Input tabular data with similarity scores and metadata.",
+        default="/groups/doudna/projects/ronb/conformal_backup/protein-conformal/data/pfam_new_proteins.npy"
     )
     parser.add_argument(
         "--output",
