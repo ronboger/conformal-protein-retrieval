@@ -6,7 +6,7 @@ from protein_conformal.util import *
 import tqdm
 
 def main(args):
-    sim2prob = pd.DataFrame(columns=["similarity", "prob_exact", "prob_partial"])
+    sim2prob = pd.DataFrame(columns=["similarity", "prob_exact_p0", "prob_exact_p1", "prob_partial_p0", "prob_partial_p1"])
 
     # Get a probability for each hit based on the distance using Venn-Abers / isotonic regression
     # load calibration data
@@ -31,17 +31,11 @@ def main(args):
         sim2prob = sim2prob.append(
             {
                 "similarity": d,
-                "prob_exact": np.mean([p_0, p_1]),
+                "prob_exact_p0": p_0,
+                "prob_exact_p1": p_1,
             },
             ignore_index=True,
         )
-
-    # save the probabilities for the exact hits, then calculate the probabilities for partial hits
-    print("saving df exact probabilities")
-    sim2prob.to_csv(
-        args.output,
-        index=False,
-    )
 
     if args.partial:
         # TODO: this stage may not be necessary, but we noticed sometimes that shuffling the data would mess up the original file
@@ -61,9 +55,17 @@ def main(args):
         for i, d in tqdm.tqdm(enumerate(bins), desc="Calculating partial probabilities", total=len(bins)):
             p_0, p_1 = simplifed_venn_abers_prediction(X_cal, y_cal, d)
             # add to column "prob_partial" for the row with the appropriate similarity score bin, i
-            sim2prob.loc[i, "prob_partial"] = np.mean([p_0, p_1])
-
+            sim2prob.loc[i, "prob_partial_p0"] = p_0
+	    sim2prob.loc[i, "prob_partial_p1"] = p_1
     print("saving df new probabilities")
+    sim2prob.to_csv(
+        args.output,
+        index=False,
+    )
+
+
+    # save the probabilities for the exact hits, then calculate the probabilities for partial hits
+    print("saving df exact probabilities")
     sim2prob.to_csv(
         args.output,
         index=False,
