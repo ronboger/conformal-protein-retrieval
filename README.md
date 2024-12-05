@@ -1,6 +1,6 @@
 # Protein conformal retrieval
 
-Code and notebooks from Functional protein mining with conformal guarantees (2024). We will share a Zenodo with the preprocessed calibration datasets, embeddings and more shortly, but results are already reproducible through executing the data preparation notebooks in each of the subdirectories before running conformal protein retrieval.
+Code and notebooks from [Functional protein mining with conformal guarantees](https://www.biorxiv.org/content/10.1101/2024.06.27.601042v5) (2024). All data can be found in [our Zenodo link](https://zenodo.org/records/14272215). Results can be reproduced through executing the data preparation notebooks in each of the subdirectories before running conformal protein retrieval.
 
 ## Installation
 
