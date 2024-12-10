@@ -46,7 +46,7 @@ def main(args):
             #     y_cal, X_cal, args.alpha, args.delta, N=100
             # )
             lhat = 0.1
-        results = results[results["D_score"] <= lhat]
+        results = results[results["D_score"] >= lhat] # cosine similarity
     elif args.fnr:
         if args.fnr_lambda:
             lhat = args.fnr_lambda
@@ -61,8 +61,8 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Process data with conformal guarantees"
     )
-    parser.add_argument("--fnr", type=bool, default=False, help="FNR risk control")
-    parser.add_argument("--fdr", type=bool, default=True, help="FPR risk control")
+    parser.add_argument("--fnr", action='store_true', default=False, help="FNR risk control")
+    parser.add_argument("--fdr", action='store_true', default=False, help="FPR risk control")
     parser.add_argument(
         "--fdr_lambda",
         type=float,
@@ -79,7 +79,7 @@ def parse_args():
         "--k", type=int, default=1000, help="maximal number of neighbors with FAISS"
     )
     parser.add_argument(
-        "--save_inter", type=float, default=0.1, help="save intermediate results"
+        "--save_inter", action='store_true', help="save intermediate results"
     )
     parser.add_argument(
         "--alpha", type=float, default=0.1, help="Alpha value for the algorithm"
@@ -105,11 +105,14 @@ def parse_args():
         "--add_date", type=bool, default=True, help="Add date to output file name"
     )
     parser.add_argument(
-        "--query_embedding", type=str, default="", help="Input file for the results"
+        "--query_embedding", type=str, default="", help="Query file with the embeddings"
     )
     parser.add_argument(
         "--query_fasta", type=str, default="", help="Input file for the results"
     )  # TODO: add an option to grab more metadata than just from the fasta file
+    parser.add_argument(
+	"--lookup_embedding", type=str, default="", help="Lookup embeddings file"
+    )
     parser.add_argument(
         "--lookup_fasta", type=bool, default=False, help="Precomputed probabilities"
     )
