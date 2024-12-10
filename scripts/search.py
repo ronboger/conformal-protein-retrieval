@@ -5,16 +5,24 @@ from protein_conformal.util import *
 
 
 def main(args):
-    query_embeddings = np.load(args.query_embedding)
-    lookup_embeddings = np.load(args.lookup_embedding)
+    query_embeddings = np.load(args.query_embedding, allow_pickle=True)
+    lookup_embeddings = np.load(args.lookup_embedding, allow_pickle=True)
     query_fasta = read_fasta(args.query_fasta)
-    lookup_fasta = read_fasta(args.lookup_fasta)
+    if args.lookup_fasta.endswith(".csv"):
+        print("Loading lookup sequences and metadata from csv")
+        lookup_df = pd.read_csv(args.lookup_fasta, sep="\t")
+        # extract sequences in column "Sequence", and metadata in columns "Pfam" and "Protein names"
+        lookup_seqs = lookup_df["Sequence"].values
+        lookup_meta = lookup_df[["Pfam", "Protein names"]].values
+    else:
+        lookup_fasta = read_fasta(args.lookup_fasta)
+        lookup_seqs, lookup_meta = lookup_fasta
+    print("Loaded data")
     # Extract sequences and metadata
     query_seqs, query_meta = query_fasta
-    lookup_seqs, lookup_meta = lookup_seqs
 
     lookup_database = load_database(lookup_embeddings)
-
+    print("Loaded database")
     k = args.k
     D, I = query(lookup_database, query_embeddings, k)
 
@@ -108,13 +116,13 @@ def parse_args():
         "--query_embedding", type=str, default="", help="Query file with the embeddings"
     )
     parser.add_argument(
-        "--query_fasta", type=str, default="", help="Input file for the results"
+        "--query_fasta", type=str, default="", help="Input file for the query sequences and metadata"
     )  # TODO: add an option to grab more metadata than just from the fasta file
     parser.add_argument(
 	"--lookup_embedding", type=str, default="", help="Lookup embeddings file"
     )
     parser.add_argument(
-        "--lookup_fasta", type=bool, default=False, help="Precomputed probabilities"
+        "--lookup_fasta", type=str, default="", help="Input file for the lookup sequences and metadata"
     )
     args = parser.parse_args()
     return args
