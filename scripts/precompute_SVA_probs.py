@@ -56,7 +56,7 @@ def main(args):
             p_0, p_1 = simplifed_venn_abers_prediction(X_cal, y_cal, d)
             # add to column "prob_partial" for the row with the appropriate similarity score bin, i
             sim2prob.loc[i, "prob_partial_p0"] = p_0
-	    sim2prob.loc[i, "prob_partial_p1"] = p_1
+            sim2prob.loc[i, "prob_partial_p1"] = p_1
     print("saving df new probabilities")
     sim2prob.to_csv(
         args.output,
