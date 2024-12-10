@@ -7,9 +7,10 @@ from protein_conformal.util import *
 
 def main(args):
     df = pd.read_csv(args.input)
+    df_probs = pd.read_csv(args.precomputed_path)
 
     if args.precomputed:
-        # TODO: if probabilities are precomputed, we can just load them and save them. This will involve the following steps:
+        # NOTE: if probabilities are precomputed, we can just load them and save them. This will involve the following steps:
         # 1. Load the precomputed probabilities
         # 2. For each hit, see which similarity score bin it corresponds to
         # 3. Assign the probability to the hit based on the similarity score bin
@@ -21,16 +22,48 @@ def main(args):
         #     df["prob_exact"] = df["prob_exact"]
         # df.to_csv(args.output, index=False)
         # return
-        pass
+
+        for d in df["D_score"]:
+            # Find lower bin, upper bin in df
+            lower_bin = df_probs[df_probs["similarity"] <= d].iloc[-1]
+            upper_bin = df_probs[df_probs["similarity"] >= d].iloc[0]
+
+            # Get probabilities for lower bin, upper bin (columns "prob_exact_p0", "prob_exact_p1")
+            p_0_lower = lower_bin["prob_exact_p0"]
+            p_1_lower = lower_bin["prob_exact_p1"]
+            p_0_upper = upper_bin["prob_exact_p0"]
+            p_1_upper = upper_bin["prob_exact_p1"]
+
+            # Interpolate probabilities
+            prob_exact = np.mean([
+                min(p_0_lower, p_1_lower, p_0_upper, p_1_upper),
+                max(p_0_lower, p_1_lower, p_0_upper, p_1_upper)
+            ])
+
+            df["prob_exact"] = prob_exact
+
+            if args.partial:
+                p_0_lower = lower_bin["prob_partial_p0"]
+                p_1_lower = lower_bin["prob_partial_p1"]
+                p_0_upper = upper_bin["prob_partial_p0"]
+                p_1_upper = upper_bin["prob_partial_p1"]
+
+                prob_partial = np.mean([
+                    min(p_0_lower, p_1_lower, p_0_upper, p_1_upper),
+                    max(p_0_lower, p_1_lower, p_0_upper, p_1_upper)
+                ])
+
+                df["prob_partial"] = prob_partial
     else:
         # Get a probability for each hit based on the distance using Venn-Abers / isotonic regression
 
-        # load calibration data
+        # Load calibration data
         data = np.load(
             "/groups/doudna/projects/ronb/conformal_backup/protein-conformal/data/pfam_new_proteins.npy",
             allow_pickle=True,
         )
         print("loading calibration data")
+
         n_calib = args.n_calib
         np.random.shuffle(data)
         cal_data = data[:n_calib]
@@ -43,6 +76,7 @@ def main(args):
         for d in df["D_score"]:
             p_0, p_1 = simplifed_venn_abers_prediction(X_cal, y_cal, d)
             p_s.append([p_0, p_1])
+
         p_s = np.array(p_s)
         abs_p = [np.abs(p[0] - p[1]) for p in p_s]
         df["prob_exact"] = np.mean(p_s, axis=1)
@@ -65,6 +99,7 @@ def main(args):
             for d in df["D_score"]:
                 p_0, p_1 = simplifed_venn_abers_prediction(X_cal, y_cal, d)
                 p_s.append([p_0, p_1])
+
             p_s = np.array(p_s)
             abs_p = [np.abs(p[0] - p[1]) for p in p_s]
             df["prob_partial"] = np.mean(p_s, axis=1)
@@ -80,7 +115,7 @@ def parse_args():
     parser = argparse.ArgumentParser("Get probabilities for similarity scores")
     parser.add_argument(
         "--precomputed",
-        type=bool,
+        action='store_true', 
         default=False,
         help="Use precomputed probabilities on similarity scores",
     )
@@ -104,7 +139,7 @@ def parse_args():
     )
     parser.add_argument(
         "--partial",
-        type=bool,
+        action='store_true', 
         default=False,
         help="Return probability of partial hits given similarity scores",
     )
