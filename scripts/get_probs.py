@@ -22,6 +22,7 @@ def main(args):
         #     df["prob_exact"] = df["prob_exact"]
         # df.to_csv(args.output, index=False)
         # return
+        prob_exact_lst, prob_partial_lst = [], []
 
         for d in df["D_score"]:
             # Find lower bin, upper bin in df
@@ -39,8 +40,7 @@ def main(args):
                 min(p_0_lower, p_1_lower, p_0_upper, p_1_upper),
                 max(p_0_lower, p_1_lower, p_0_upper, p_1_upper)
             ])
-
-            df["prob_exact"] = prob_exact
+            prob_exact_lst.append(prob_exact)
 
             if args.partial:
                 p_0_lower = lower_bin["prob_partial_p0"]
@@ -52,8 +52,10 @@ def main(args):
                     min(p_0_lower, p_1_lower, p_0_upper, p_1_upper),
                     max(p_0_lower, p_1_lower, p_0_upper, p_1_upper)
                 ])
-
-                df["prob_partial"] = prob_partial
+                prob_partial_lst.append(prob_partial)
+        df["prob_exact"] = prob_exact_lst
+        if args.partial:
+            df["prob_partial"] = prob_partial_lst
     else:
         # Get a probability for each hit based on the distance using Venn-Abers / isotonic regression
 
