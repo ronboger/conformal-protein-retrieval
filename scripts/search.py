@@ -8,12 +8,14 @@ def main(args):
     query_embeddings = np.load(args.query_embedding, allow_pickle=True)
     lookup_embeddings = np.load(args.lookup_embedding, allow_pickle=True)
     query_fasta = read_fasta(args.query_fasta)
-    if args.lookup_fasta.endswith(".csv"):
+    if args.lookup_fasta.endswith(".tsv"):
         print("Loading lookup sequences and metadata from csv")
         lookup_df = pd.read_csv(args.lookup_fasta, sep="\t")
         # extract sequences in column "Sequence", and metadata in columns "Pfam" and "Protein names"
         lookup_seqs = lookup_df["Sequence"].values
-        lookup_meta = lookup_df[["Pfam", "Protein names"]].values
+        metadata_columns = ["Entry", "Pfam", "Protein names"]
+        # Construct `lookup_meta` as a list of tuples for each row
+        lookup_meta = lookup_df[metadata_columns].apply(tuple, axis=1).tolist()
     else:
         lookup_fasta = read_fasta(args.lookup_fasta)
         lookup_seqs, lookup_meta = lookup_fasta
@@ -30,13 +32,19 @@ def main(args):
     results = []
     for i, (indices, distances) in enumerate(zip(I, D)):
         for idx, distance in zip(indices, distances):
+            # define result to have columns in metadata_columns
             result = {
                 "query_seq": query_seqs[i],
                 "query_meta": query_meta[i],
                 "lookup_seq": lookup_seqs[idx],
-                "lookup_meta": lookup_meta[idx],
                 "D_score": distance,
             }
+            if args.lookup_fasta.endswith(".tsv"):
+                result["lookup_entry"] = lookup_meta[idx][0]
+                result["lookup_pfam"] = lookup_meta[idx][1]
+                result["lookup_protein_names"] = lookup_meta[idx][2]
+            else:
+                result["lookup_meta"] = lookup_meta[idx]
             results.append(result)
     results = pd.DataFrame(results)
     if args.save_inter:
