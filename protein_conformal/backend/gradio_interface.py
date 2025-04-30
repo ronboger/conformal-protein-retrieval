@@ -746,7 +746,7 @@ def create_interface():
                 """)
                 
                 risk_type = gr.Radio(
-                    ["fdr", "fnr"],
+                    ["FDR", "FNR"],
                     label="Risk Type to Control",
                     value="fdr",
                     info="FDR: Controls false positives among results. FNR: Controls missed true matches."
