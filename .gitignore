@@ -15,7 +15,10 @@ data/dali_multidomain_results_csv/
 data/dali_multidomain_results_csv_small/
 figs/
 data/gene_unknown/
-data/
+data/lookup/
+data/calibration/
+data/inputs/
+data/lookup_embeddings_meta_data.tsv
 exported_reports/
 inter_results/
 saved_sessions/
