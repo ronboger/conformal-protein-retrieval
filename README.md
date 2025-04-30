@@ -1,5 +1,8 @@
 # Protein conformal retrieval
 
+## THIS REPO IS FORKED FROM ORIGINAL REPO FOR WORK ON THE GRADIO APP
+
+
 Code and notebooks from [Functional protein mining with conformal guarantees](https://www.nature.com/articles/s41467-024-55676-y) (2024). All data can be found in [our Zenodo link](https://zenodo.org/records/14272215). Results can be reproduced through executing the data preparation notebooks in each of the subdirectories before running conformal protein retrieval.
 
 ## Installation

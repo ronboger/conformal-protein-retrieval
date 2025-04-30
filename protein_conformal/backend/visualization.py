@@ -3,6 +3,8 @@ Visualization utilities for protein conformal prediction results.
 
 This module provides visualization tools for protein structures,
 similarity networks, and statistical summaries of conformal prediction results.
+
+CURRENTLY NOT USED BECAUSE IT IS NOT WORKING
 """
 
 import os
