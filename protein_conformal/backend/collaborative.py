@@ -5,7 +5,7 @@ This module provides functionality for saving/loading sessions,
 exporting results in various formats.
 
 CURRENTLY LOADING SESSION IS NOT WORKING 
-*very sad :( *
+very sad :( 
 """
 
 import json
