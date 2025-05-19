@@ -30,7 +30,8 @@ if __name__=='__main__':
     from model_protein_moe import trans_basic_block, trans_basic_block_Config
     from utils_search import *
 
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    # device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cpu')
 
     #Protein-Vec MOE model checkpoint and config
     vec_model_cpnt = os.path.join(args.path_to_protein_vec, 'protein_vec.ckpt')
