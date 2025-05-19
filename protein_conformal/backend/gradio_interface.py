@@ -35,6 +35,10 @@ DEFAULT_LOOKUP_EMBEDDING = "./data/lookup_embeddings.npy"
 DEFAULT_LOOKUP_METADATA = "./data/lookup_embeddings_meta_data.tsv"
 DEFAULT_CALIBRATION_DATA = "./data/pfam_new_proteins.npy"
 
+# First, add constants for the SCOPE database files at the top of the file, near the other DEFAULT constants
+DEFAULT_SCOPE_EMBEDDING = "./data/lookup/scope_lookup_embeddings.npy"
+DEFAULT_SCOPE_METADATA = "./data/lookup/scope_lookup.fasta"
+
 # Amino acid validation constants
 VALID_AA = set('ACDEFGHIKLMNPQRSTVWY')
 SPECIAL_CHARS = set('XUB')  # X=unknown, U=selenocysteine, B=ambiguous D/N
@@ -160,7 +164,6 @@ def embed_sequences(sequences: List[str],
 
 def perform_conformal_prediction(embeddings: np.ndarray, 
                                  risk_tolerance: float, 
-                                 confidence_level: float,
                                  risk_type: str = "fdr") -> Dict[str, Any]:
     """
     Perform conformal prediction on the embeddings with control for either FDR or FNR.
@@ -168,7 +171,6 @@ def perform_conformal_prediction(embeddings: np.ndarray,
     Args:
         embeddings: NumPy array of embeddings
         risk_tolerance: Risk tolerance value (0-0.2)
-        confidence_level: Prediction confidence threshold (90%, 95%, 99%)
         risk_type: Type of risk to control - "fdr" (False Discovery Rate) or "fnr" (False Negative Rate)
         
     Returns:
@@ -177,7 +179,6 @@ def perform_conformal_prediction(embeddings: np.ndarray,
     try:
         # Convert risk_tolerance from percentage to ratio (0-1)
         alpha = risk_tolerance / 100.0
-        confidence = float(str(confidence_level).strip('%')) / 100.0
         
         # Generate dummy calibration data for demonstration
         # In a real implementation, this would come from actual calibration data
@@ -246,7 +247,7 @@ def perform_conformal_prediction(embeddings: np.ndarray,
         fnr = fn / (fn + tp) if (fn + tp) > 0 else 0
         
         return {
-            "message": f"Performed conformal prediction with {risk_type.upper()} control, risk tolerance {risk_tolerance}%, confidence level {confidence_level}",
+            "message": f"Performed conformal prediction with {risk_type.upper()} control, risk tolerance {risk_tolerance}%",
             "embeddings_shape": embeddings.shape,
             "sample_embeddings": embeddings[:3, :5].tolist() if len(embeddings) > 0 and embeddings.shape[1] >= 5 else [],
             "predicted_labels": class_labels,
@@ -412,23 +413,21 @@ def process_input(input_text: str,
                   input_type: str,
                   risk_type: str,
                   risk_value: float,
-                  confidence_level: str,
                   use_protein_vec: bool,
                   custom_embeddings: Optional[Any],
                   lookup_db: str = DEFAULT_LOOKUP_EMBEDDING,
                   metadata_db: str = DEFAULT_LOOKUP_METADATA,
-                  progress=gr.Progress()) -> Dict[str, Any]:
+                  progress=gr.Progress()) -> Tuple[Dict[str, Any], List[List[Any]], Dict[str, Any]]:
     """
     Process the input and generate predictions.
     
     Args:
-        input_text: Text input containing sequences or FASTA
+        input_text: Text input containing sequences (deprecated, kept for compatibility)
         fasta_text: Text input containing FASTA formatted sequences 
         upload_file: Uploaded FASTA file
-        input_type: Type of input (sequence or FASTA)
+        input_type: Type of input (always "fasta_format" now)
         risk_type: Type of risk to control (FDR or FNR)
         risk_value: Risk tolerance value (0-0.2)
-        confidence_level: Prediction confidence level (90%, 95%, 99%)
         use_protein_vec: Whether to use Protein-Vec for embeddings
         custom_embeddings: User-uploaded embeddings file
         lookup_db: Path to pre-embedded lookup database
@@ -436,29 +435,23 @@ def process_input(input_text: str,
         progress: Gradio progress bar
         
     Returns:
-        Dictionary with results
+        Tuple containing:
+        - Summary information (for the summary JSON display)
+        - Table data (for the DataFrame display)
+        - Complete results (for the raw JSON output)
     """
-    # Step 1: Get sequences based on input type
+    # Step 1: Get sequences from FASTA input
     sequences = []
-    if input_type == "fasta_format":
-        if upload_file is not None:
-            sequences = process_uploaded_file(upload_file)
-        elif fasta_text and fasta_text.strip():
-            sequences = parse_fasta(fasta_text)
-        else:
-            return {"error": "No FASTA input provided"}
-    elif input_type == "protein_sequence" and input_text:
-        # Split by newlines and filter out empty strings
-        sequences = [seq.strip() for seq in input_text.split('\n') if seq.strip()]
-        
-        # Validate sequences
-        for i, seq in enumerate(sequences):
-            is_valid, error = validate_sequence(seq)
-            if not is_valid:
-                return {"error": f"Invalid sequence #{i+1}: {error}"}
+    # Process FASTA input (either file upload or text)
+    if upload_file is not None:
+        sequences = process_uploaded_file(upload_file)
+    elif fasta_text and fasta_text.strip():
+        sequences = parse_fasta(fasta_text)
+    else:
+        return {"error": "No FASTA input provided. Please enter FASTA content or upload a FASTA file."}, [], {"error": "No FASTA input provided. Please enter FASTA content or upload a FASTA file."}
     
     if not sequences and custom_embeddings is None:
-        return {"error": "No sequences provided. Please check your input."}
+        return {"error": "No sequences found in the FASTA input. Please check your input format."}, [], {"error": "No sequences found in the FASTA input. Please check your input format."}
     
     # Step 2: Get embeddings
     if use_protein_vec and not custom_embeddings:
@@ -472,7 +465,7 @@ def process_input(input_text: str,
             embeddings = embed_sequences(sequences, tokenizer, model, model_deep, device, progress)
             progress(0.6, desc="Embeddings complete!")
         except Exception as e:
-            return {"error": f"Error generating embeddings: {str(e)}"}
+            return {"error": f"Error generating embeddings: {str(e)}"}, [], {"error": f"Error generating embeddings: {str(e)}"}
     elif custom_embeddings:
         try:
             progress(0.2, desc="Loading custom embeddings...")
@@ -485,13 +478,20 @@ def process_input(input_text: str,
             os.unlink(tmp_path)  # Clean up temp file
             progress(0.4, desc="Custom embeddings loaded!")
         except Exception as e:
-            return {"error": f"Error loading embeddings: {str(e)}"}
+            return {"error": f"Error loading embeddings: {str(e)}"}, [], {"error": f"Error loading embeddings: {str(e)}"}
     else:
-        return {"error": "Either Protein-Vec must be enabled or custom embeddings must be provided"}
+        return {"error": "Either Protein-Vec must be enabled or custom embeddings must be provided"}, [], {"error": "Either Protein-Vec must be enabled or custom embeddings must be provided"}
     
     # Step 3: Run search with conformal guarantees
     try:
-        progress(0.5, desc=f"Starting search with {risk_type.upper()} control...")
+        # Determine which database is being used
+        database_type = "Custom"
+        if lookup_db == DEFAULT_LOOKUP_EMBEDDING:
+            database_type = "UniProt"
+        elif lookup_db == DEFAULT_SCOPE_EMBEDDING:
+            database_type = "SCOPE"
+            
+        progress(0.5, desc=f"Starting search against {database_type} database with {risk_type.upper()} control...")
         results_df = run_search(
             embeddings, 
             risk_type, 
@@ -501,29 +501,69 @@ def process_input(input_text: str,
             progress=progress
         )
         
-        # Convert to dictionary for output
-        results = {
-            "message": f"Successfully performed {risk_type.upper()} controlled search with {risk_value} risk tolerance",
-            "num_matches": len(results_df),
-            "matches": results_df.to_dict(orient="records")[:20],  # Return first 20 records
-            "all_results": f"Found {len(results_df)} total matches that satisfy the {risk_type.upper()} constraint of {risk_value}."
+        # Store all matches in the session
+        all_matches = results_df.to_dict(orient="records")
+        
+        # For display purposes, provide summary stats
+        total_matches = len(all_matches)
+        
+        # 1. Create summary information for the JSON display
+        summary = {
+            "message": f"Successfully performed {risk_type.upper()} controlled search against {database_type} database with {risk_value} risk tolerance",
+            "database_used": database_type,
+            "num_matches": total_matches,
+            "summary": {
+                "total_results": total_matches,
+                "database": database_type,
+                "note": f"Found {total_matches} total matches in the {database_type} database that satisfy the {risk_type.upper()} constraint of {risk_value}. All results are displayed and can be sorted by clicking on column headers."
+            },
+            "all_results": f"Found {total_matches} total matches in the {database_type} database that satisfy the {risk_type.upper()} constraint of {risk_value}."
         }
         
-        # Store in session for potential later use
+        # 2. Table data for the DataFrame display - convert ALL matches to list of lists for better Gradio compatibility
+        table_data = []
+        for match in all_matches:  # No limit, display all matches
+            row = [
+                match.get("query_idx", ""),
+                match.get("lookup_seq", ""),
+                match.get("D_score", ""),
+                match.get("lookup_entry", ""),
+                match.get("lookup_pfam", ""),
+                match.get("lookup_protein_names", "")
+            ]
+            table_data.append(row)
+        
+        # 3. Complete results for the raw JSON output
+        complete_results = {
+            "message": summary["message"],
+            "database_used": database_type,
+            "num_matches": total_matches,
+            "matches": all_matches,  # Include all matches
+            "all_results": summary["all_results"]
+        }
+        
+        # Store in session for potential later use - include ALL matches for export
         global CURRENT_SESSION
         CURRENT_SESSION = {
-            "results": results,
+            "results": {
+                "message": summary["message"],
+                "database_used": database_type,
+                "num_matches": total_matches,
+                "matches": all_matches,  # Store all matches for export
+                "all_results": summary["all_results"]
+            },
             "parameters": {
                 "risk_type": risk_type,
                 "risk_value": risk_value,
-                "confidence_level": confidence_level,
-                "input_type": input_type
+                "database_type": database_type,
+                "input_type": "fasta_format"  # Always FASTA now
             }
         }
         
-        return results
+        return summary, table_data, complete_results
     except Exception as e:
-        return {"error": f"Error during search: {str(e)}"}
+        error_message = {"error": f"Error during search: {str(e)}"}
+        return error_message, [], error_message
 
 def save_current_session(session_name: str) -> Dict[str, Any]:
     """
@@ -567,52 +607,78 @@ def save_current_session(session_name: str) -> Dict[str, Any]:
 
 def load_saved_session(file_obj) -> Dict[str, Any]:
     """
-    Load a session from a file.
+    Load a saved session from a file.
     
     Args:
         file_obj: Uploaded session file
         
     Returns:
-        Dictionary with session data and status
+        Dictionary with session data formatted for display
     """
+    global CURRENT_SESSION
+    
+    if not file_obj:
+        return {"error": "No file selected"}, None, None
+    
     try:
-        # Save the uploaded file to a temporary location
-        with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as tmp:
-            tmp.write(file_obj.read())
-            tmp_path = tmp.name
+        # Read the file content
+        import json
+        content = file_obj.read()
+        if isinstance(content, bytes):
+            content = content.decode('utf-8')
         
-        # Load the session
-        with open(tmp_path, 'r') as f:
-            import json
-            session_data = json.load(f)
+        # Parse the JSON content
+        session_data = json.loads(content)
         
-        # Update the current session
-        global CURRENT_SESSION
+        # Store in global session
         CURRENT_SESSION = session_data
         
-        # Clean up the temporary file
-        os.unlink(tmp_path)
-        
-        # Return the results portion for display
+        # Prepare results for the three outputs (summary, table, full JSON)
         if "results" in session_data:
+            results = session_data["results"]
+            
+            # Data for the results summary
+            summary = {
+                "message": results.get("message", ""),
+                "num_matches": results.get("num_matches", 0),
+                "summary": {
+                    "total_results": results.get("num_matches", 0),
+                    "note": f"Found {results.get('num_matches', 0)} total matches. All results are displayed and can be sorted by clicking on column headers."
+                },
+                "all_results": results.get("all_results", "")
+            }
+            
+            # Data for the results table - ALL matches, formatted as list of lists
+            matches = results.get("matches", []) if "matches" in results else []
+            table_data = []
+            for match in matches:
+                row = [
+                    match.get("query_idx", ""),
+                    match.get("lookup_seq", ""),
+                    match.get("D_score", ""),
+                    match.get("lookup_entry", ""),
+                    match.get("lookup_pfam", ""),
+                    match.get("lookup_protein_names", "")
+                ]
+                table_data.append(row)
+            
+            # Return all three components
             return {
                 "success": True,
-                "message": "Session loaded successfully",
-                "results": session_data["results"]
-            }
+                "message": "Session loaded successfully"
+            }, summary, table_data, results
         else:
-            return {
-                "error": "Invalid session format: missing results"
-            }
+            return {"error": "Invalid session format"}, None, None, None
     
     except Exception as e:
         return {
             "error": f"Error loading session: {str(e)}"
-        }
+        }, None, None, None
 
 def export_current_results(format_type: str) -> Dict[str, Any]:
     """
     Export the current results in the specified format.
+    All matches (not just displayed ones) will be included in the export.
     
     Args:
         format_type: Format to export (csv, json)
@@ -638,20 +704,24 @@ def export_current_results(format_type: str) -> Dict[str, Any]:
         if format_type == "csv":
             if "matches" in CURRENT_SESSION["results"]:
                 import pandas as pd
+                # Export ALL matches, not just the displayed ones
                 df = pd.DataFrame(CURRENT_SESSION["results"]["matches"])
                 df.to_csv(file_path, index=False)
+                total_exported = len(df)
             else:
                 return {"error": "No matches to export"}
         elif format_type == "json":
             with open(file_path, 'w') as f:
                 import json
+                # For JSON export, we include the full result structure
                 json.dump(CURRENT_SESSION["results"], f, indent=2)
+                total_exported = CURRENT_SESSION["results"]["num_matches"]
         else:
             return {"error": f"Unsupported format: {format_type}"}
         
         return {
             "success": True,
-            "message": f"Results exported as {file_path}",
+            "message": f"Results exported as {file_path} ({total_exported} records)",
             "file_path": file_path
         }
     
@@ -694,35 +764,18 @@ def create_interface():
         with gr.Row():
             with gr.Column():
                 # Input section
-                gr.Markdown("## 1. Input Protein Sequences")
+                gr.Markdown("## 1. Input Protein Sequences (FASTA format)")
                 
-                input_type = gr.Radio(
-                    ["protein_sequence", "fasta_format"],
-                    label="Input Format",
-                    value="protein_sequence",
-                    info="Choose 'protein_sequence' for raw sequences or 'fasta_format' for FASTA formatted text"
+                # FASTA input - always visible now
+                fasta_text = gr.TextArea(
+                    lines=6,
+                    label="Enter FASTA content",
+                    placeholder=">Protein1\nMKTVRQERLKSIVRILERSKEPVSGAQLAEELSVSRQVIVQDIAYLRSLGYNIVATPRGYVLAGG"
                 )
-                
-                # Protein sequence input
-                with gr.Group(visible=True) as sequence_group:
-                    input_text = gr.TextArea(
-                        lines=6,
-                        label="Enter protein sequences (one per line)",
-                        placeholder="MKTVRQERLKSIVRILERSKEPVSGAQLAEELSVSRQVIVQDIAYLRSLGYNIVATPRGYVLAGG"
-                    )
-                    sequence_validation = gr.HTML(label="Sequence Validation")
-                
-                # FASTA input
-                with gr.Group(visible=False) as fasta_group:
-                    fasta_text = gr.TextArea(
-                        lines=6,
-                        label="Enter FASTA content",
-                        placeholder=">Protein1\nMKTVRQERLKSIVRILERSKEPVSGAQLAEELSVSRQVIVQDIAYLRSLGYNIVATPRGYVLAGG"
-                    )
-                    upload_file = gr.File(
-                        label="Or upload a FASTA file",
-                        file_types=[".fasta", ".fa", ".txt"]
-                    )
+                upload_file = gr.File(
+                    label="Or upload a FASTA file",
+                    file_types=[".fasta", ".fa", ".txt"]
+                )
                 
                 # Embedding options
                 with gr.Accordion("Advanced Embedding Options", open=False):
@@ -761,62 +814,72 @@ def create_interface():
                     info="Lower values are more conservative (fewer false positives for FDR, fewer missed matches for FNR)"
                 )
                 
-                confidence_level = gr.Dropdown(
-                    ["90%", "95%", "99%"],
-                    label="Confidence Level",
-                    value="95%",
-                    info="Statistical confidence level for predictions"
-                )
-                
                 # Database selection
                 with gr.Accordion("Database Options", open=False):
                     gr.Markdown("""
-                    Select which pre-embedded database to search against. The default database includes a comprehensive
-                    collection of protein embeddings from common repositories.
+                    ## Database Selection
+                    
+                    Select which pre-embedded database to search against:
+                    
+                    ### Available Databases:
+                    
+                    **UniProt** - A comprehensive collection of protein sequences and functional annotations. Provides broad coverage across diverse species and protein families.
+                    
+                    **SCOPE** - Structural Classification of Proteins database containing protein domains with known 3D structures. Useful for structural and functional studies.
+                    
+                    You can select different combinations of embedding databases and metadata files to customize your search.
                     """)
                     
+                    db_type = gr.Radio(
+                        ["UniProt", "SCOPE", "Custom"],
+                        label="Database Type",
+                        value="UniProt",
+                        info="Select which database to search against"
+                    )
+                    
                     lookup_db = gr.Dropdown(
-                        [DEFAULT_LOOKUP_EMBEDDING, "./data/custom_db.npy"],
-                        label="Lookup Database",
+                        [DEFAULT_LOOKUP_EMBEDDING, DEFAULT_SCOPE_EMBEDDING, "./data/custom_db.npy"],
+                        label="Embedding Database",
                         value=DEFAULT_LOOKUP_EMBEDDING,
-                        info="Database of pre-embedded sequences to search against"
+                        info="Database of pre-embedded protein sequences to search against"
                     )
                     
                     metadata_db = gr.Dropdown(
-                        [DEFAULT_LOOKUP_METADATA, "./data/custom_meta.tsv"],
+                        [DEFAULT_LOOKUP_METADATA, DEFAULT_SCOPE_METADATA, "./data/custom_meta.tsv"],
                         label="Metadata Database",
                         value=DEFAULT_LOOKUP_METADATA,
-                        info="Metadata for the lookup database"
+                        info="Metadata for the selected protein database"
                     )
+                    
+                    gr.Markdown("""
+                    *Note: UniProt provides greater coverage of protein sequence space, while SCOPE focuses on well-characterized structural domains.*
+                    """)
                 
                 # Submit button
-                submit_btn = gr.Button("Run Search with Conformal Guarantees", variant="primary")
+                submit_btn = gr.Button("Search", variant="primary")
         
         # Results section
         with gr.Row():
             gr.Markdown("## 3. Results")
-            output = gr.JSON(label="Search Results")
         
-        # Session management
-        with gr.Accordion("Session Management", open=False):
-            with gr.Row():
-                with gr.Column():
-                    session_name = gr.Textbox(
-                        label="Session Name",
-                        placeholder="my_analysis_session",
-                        info="Name for the saved session file"
-                    )
-                    save_btn = gr.Button("Save Session")
-                    save_status = gr.JSON(label="Save Status")
-            
-            with gr.Row():
-                with gr.Column():
-                    session_file = gr.File(
-                        label="Upload Session File",
-                        file_types=[".json"]
-                    )
-                    load_btn = gr.Button("Load Session")
-                    load_status = gr.JSON(label="Load Status")
+        with gr.Row():
+            with gr.Column():
+                # Split the output into summary and results
+                results_summary = gr.JSON(label="Search Summary")
+                
+                # Add a DataFrame for displaying results in a tabular format
+                results_table = gr.Dataframe(
+                    headers=["query_idx", "lookup_seq", "D_score", "lookup_entry", "lookup_pfam", "lookup_protein_names"],
+                    label="Results Table (All Matches - Click Column Headers to Sort)",
+                    wrap=True,
+                    interactive=True  # Enable interactions like sorting
+                )
+                
+                gr.Markdown("*Note: All matches are displayed in the table. Click on column headers to sort the results.*")
+                
+                # Keep the original JSON output as an option for advanced users
+                with gr.Accordion("Full JSON Output", open=False):
+                    output = gr.JSON(label="Raw Results")
         
         # Export results
         with gr.Accordion("Export Results", open=False):
@@ -830,19 +893,6 @@ def create_interface():
                     export_btn = gr.Button("Export Results")
                     export_status = gr.JSON(label="Export Status")
         
-        # Update visibility of input groups based on input type
-        def update_input_visibility(input_type):
-            return {
-                sequence_group: gr.update(visible=(input_type == "protein_sequence")),
-                fasta_group: gr.update(visible=(input_type == "fasta_format"))
-            }
-        
-        input_type.change(
-            fn=update_input_visibility,
-            inputs=[input_type],
-            outputs=[sequence_group, fasta_group]
-        )
-        
         # Update visibility of custom embeddings based on checkbox
         def update_embeddings_visibility(use_protein_vec):
             return {custom_embeddings: not use_protein_vec}
@@ -853,47 +903,6 @@ def create_interface():
             outputs=[custom_embeddings]
         )
         
-        # Sequence validation and highlighting
-        def on_sequence_change(text):
-            if not text.strip():
-                return ""
-            
-            lines = text.strip().split("\n")
-            results = []
-            
-            for i, line in enumerate(lines):
-                if not line.strip():
-                    continue
-                
-                is_valid, error = validate_sequence(line.strip())
-                
-                if is_valid:
-                    highlighted = highlight_sequence(line.strip())
-                    results.append(f"<div style='margin-bottom:5px;'><strong>Sequence {i+1}:</strong> Valid ✓ <div style='font-family:monospace;'>{highlighted}</div></div>")
-                else:
-                    results.append(f"<div style='margin-bottom:5px; color:red;'><strong>Sequence {i+1}:</strong> Invalid ✗ - {error}</div>")
-            
-            return "<div>" + "".join(results) + "</div>"
-        
-        input_text.change(
-            fn=on_sequence_change,
-            inputs=[input_text],
-            outputs=[sequence_validation]
-        )
-        
-        # Session management
-        save_btn.click(
-            fn=save_current_session,
-            inputs=[session_name],
-            outputs=[save_status]
-        )
-        
-        load_btn.click(
-            fn=load_saved_session,
-            inputs=[session_file],
-            outputs=[load_status, output]
-        )
-        
         # Export functionality
         export_btn.click(
             fn=export_current_results,
@@ -901,16 +910,43 @@ def create_interface():
             outputs=[export_status]
         )
         
-        # Main prediction submission
+        # Main prediction submission - hardcode input_type as "fasta_format"
         submit_btn.click(
-            fn=process_input,
+            fn=lambda fasta, upload, risk_t, risk_v, use_pv, custom_emb, lookup, metadata: 
+                process_input("", fasta, upload, "fasta_format", risk_t, risk_v, use_pv, custom_emb, lookup, metadata),
             inputs=[
-                input_text, fasta_text, upload_file, input_type, 
-                risk_type, risk_value, confidence_level, 
-                use_protein_vec, custom_embeddings,
+                fasta_text, upload_file, 
+                risk_type, risk_value, use_protein_vec, custom_embeddings,
                 lookup_db, metadata_db
             ],
-            outputs=[output]
+            outputs=[results_summary, results_table, output]
+        )
+        
+        # Add radio button event handler to update dropdown selections based on database type
+        # Add this to the bottom of create_interface function with the other event handlers
+        
+        # Database selection event handler
+        def update_database_selection(db_type):
+            if db_type == "UniProt":
+                return {
+                    lookup_db: DEFAULT_LOOKUP_EMBEDDING,
+                    metadata_db: DEFAULT_LOOKUP_METADATA
+                }
+            elif db_type == "SCOPE":
+                return {
+                    lookup_db: DEFAULT_SCOPE_EMBEDDING,
+                    metadata_db: DEFAULT_SCOPE_METADATA
+                }
+            else:  # Custom
+                return {
+                    lookup_db: "./data/custom_db.npy",
+                    metadata_db: "./data/custom_meta.tsv"
+                }
+        
+        db_type.change(
+            fn=update_database_selection,
+            inputs=[db_type],
+            outputs=[lookup_db, metadata_db]
         )
     
     return interface

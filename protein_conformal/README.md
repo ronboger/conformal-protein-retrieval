@@ -61,7 +61,7 @@ python -m protein_conformal.gradio_app
 ### Using the Web Interface
 
 1. **Input** tab: Choose your input method and enter protein sequences, upload files, or query AlphaFold.
-2. **Conformal Parameters** tab: Configure risk tolerance and confidence level for the analysis.
+2. **Conformal Parameters** tab: Configure risk tolerance for the analysis.
 3. **Embedding Options** tab: Select whether to use Protein-Vec or custom embeddings.
 4. Click the "Run Prediction" button to perform the analysis.
 5. **Visualizations** tab: Explore the 3D structures, similarity networks, and statistical summaries.
@@ -80,7 +80,6 @@ response = requests.post(
     data={
         "input_type": "protein_sequence",
         "risk_tolerance": 5.0,
-        "confidence_level": "95%",
         "use_protein_vec": True,
         "sequences": "MKTVRQERLKSIVRILERSKEPVSGAQLAEELSVSRQVIVQDIAYLRSLGYN"
     }

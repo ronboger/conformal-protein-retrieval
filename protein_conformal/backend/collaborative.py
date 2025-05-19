@@ -291,7 +291,6 @@ def create_api_app(model_instance=None) -> FastAPI:
         uniprot_id: Optional[str] = Form(None),
         input_type: str = Form(...),
         risk_tolerance: float = Form(5.0),
-        confidence_level: str = Form("95%"),
         use_protein_vec: bool = Form(True),
         custom_embeddings: Optional[UploadFile] = File(None)
     ):
@@ -312,7 +311,6 @@ def create_api_app(model_instance=None) -> FastAPI:
                 "message": "API prediction endpoint functioning correctly",
                 "params": {
                     "risk_tolerance": risk_tolerance,
-                    "confidence_level": confidence_level,
                     "use_protein_vec": use_protein_vec
                 }
             }

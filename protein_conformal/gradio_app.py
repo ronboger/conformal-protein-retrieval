@@ -6,13 +6,9 @@ This file imports the backend functionality and launches the Gradio interface.
 
 import argparse
 import os
-import sys
 from protein_conformal.backend.gradio_interface import create_interface
 
 def main():
-    """
-    Parse command line arguments and launch the Gradio interface.
-    """
     parser = argparse.ArgumentParser(description='Protein Conformal Prediction Gradio App')
     parser.add_argument('--host', type=str, default='127.0.0.1', help='Host to run the server on')
     parser.add_argument('--port', type=int, default=7860, help='Port to run the server on')
@@ -23,11 +19,9 @@ def main():
     
     args = parser.parse_args()
     
-    # Create directories for session and report storage
     os.makedirs("saved_sessions", exist_ok=True)
     os.makedirs("exported_reports", exist_ok=True)
     
-    # Create and launch the interface
     interface = create_interface()
     
     # Start API server if requested
