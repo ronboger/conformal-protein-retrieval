@@ -6,7 +6,14 @@ This file imports the backend functionality and launches the Gradio interface.
 
 import argparse
 import os
+import sys
+import matplotlib
+# Use a non-interactive backend for matplotlib to avoid issues on servers without display
+matplotlib.use('Agg')
+
 from protein_conformal.backend.gradio_interface import create_interface
+from protein_conformal.util import load_database, query, read_fasta, get_sims_labels
+from protein_conformal.util import get_thresh_new_FDR, get_thresh_new, risk, calculate_false_negatives, simplifed_venn_abers_prediction
 
 def main():
     parser = argparse.ArgumentParser(description='Protein Conformal Prediction Gradio App')
