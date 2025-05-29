@@ -1,11 +1,12 @@
 """
 Collaborative features for protein conformal prediction.
 
-This module provides functionality for saving/loading sessions,
-exporting results in various formats.
+I had plans for session saving and loading, report generation and sharing,
+potentially collaborative workflows.
 
-CURRENTLY LOADING SESSION IS NOT WORKING 
-very sad :( 
+but I dont really think these are needed for the app. 
+so some code in this file isnt used (actually, none of them are used atm)
+keeping it here in case in the future, we want to enable a seperate backend API server.
 """
 
 import json
