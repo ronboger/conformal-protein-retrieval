@@ -23,6 +23,7 @@ import base64
 
 # Add the protein_vec_models directory to Python's path
 sys.path.append("protein_vec_models")
+# allows pythoin to find and import modules from that directory
 try:
     from model_protein_moe import trans_basic_block, trans_basic_block_Config
     from utils_search import featurize_prottrans, embed_vec
@@ -36,17 +37,17 @@ from protein_conformal.util import load_database, query, read_fasta, get_sims_la
 import matplotlib.pyplot as plt
 
 # Pre-embedded database paths
-DEFAULT_LOOKUP_EMBEDDING = "./data/lookup_embeddings.npy"
-DEFAULT_LOOKUP_METADATA = "./data/lookup_embeddings_meta_data.tsv"
-DEFAULT_CALIBRATION_DATA = "./results/calibration_probs.csv"
+DEFAULT_LOOKUP_EMBEDDING = "./data/lookup_embeddings.npy" # default path to the UniProt lookup embeddings 
+DEFAULT_LOOKUP_METADATA = "./data/lookup_embeddings_meta_data.tsv" # default path to the UniProt lookup metadata
+DEFAULT_CALIBRATION_DATA = "./results/calibration_probs.csv" # default path to the calibration data
 
 # First, add constants for the SCOPE database files at the top of the file, near the other DEFAULT constants
-DEFAULT_SCOPE_EMBEDDING = "./data/lookup/scope_lookup_embeddings.npy"
-DEFAULT_SCOPE_METADATA = "./data/lookup/scope_lookup.fasta"
+DEFAULT_SCOPE_EMBEDDING = "./data/lookup/scope_lookup_embeddings.npy" # default path to the SCOPE lookup embeddings
+DEFAULT_SCOPE_METADATA = "./data/lookup/scope_lookup.fasta" # default path to the SCOPE lookup metadata
 
 # Paths used for temporary storage of uploaded database files
-CUSTOM_UPLOAD_EMBEDDING = "./data/custom_uploaded_embedding.npy"
-CUSTOM_UPLOAD_METADATA = "./data/custom_uploaded_metadata.tsv"
+CUSTOM_UPLOAD_EMBEDDING = "./data/custom_uploaded_embedding.npy" # path to the custom uploaded embeddings
+CUSTOM_UPLOAD_METADATA = "./data/custom_uploaded_metadata.tsv" # path to the custom uploaded metadata
 
 # Amino acid validation constants
 VALID_AA = set('ACDEFGHIKLMNPQRSTVWY')
@@ -60,10 +61,14 @@ def load_models(progress=gr.Progress()):
     Load the ProtTrans and Protein-Vec models.
     
     Args:
-        progress: Gradio progress bar
+        progress: Gradio progress bar to show the user when loading
         
     Returns:
         tuple: (tokenizer, model, model_deep, device)
+               - tokenizer: The ProtTrans tokenizer.
+               - model: The ProtTrans encoder model.
+               - model_deep: The Protein-Vec model.
+               - device: The computation device (CPU or CUDA GPU).
     """
     progress(0.1, desc="Initializing...")
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -130,14 +135,17 @@ def process_uploaded_file(file_obj) -> List[str]:
     os.unlink(tmp_path)  # Clean up temp file
     return sequences
 
-def embed_sequences(sequences: List[str], 
-                    tokenizer, 
-                    model, 
-                    model_deep, 
-                    device,
-                    progress=gr.Progress()) -> np.ndarray:
+def embed_sequences(sequences: List[str], # Defines a function to generate embeddings for protein sequences.
+                    tokenizer, # The ProtTrans tokenizer.
+                    model, # The ProtTrans encoder model.
+                    model_deep, # The Protein-Vec model.
+                    device, # The computation device (CPU/GPU).
+                    progress=gr.Progress()) -> np.ndarray: # Gradio progress bar. Returns a NumPy array of embeddings.
     """
-    Generate embeddings for a list of protein sequences.
+    Ferforms the same function as embed_protein_vec.py
+
+    Converts raw protein sequences into numerical embeddings (vectors) by running it through 
+    ProtTrans, then further process with Protein-Vec
     
     Args:
         sequences: List of protein sequences
@@ -176,13 +184,22 @@ def perform_conformal_prediction(embeddings: np.ndarray,
                                  risk_type: str = "fdr",
                                  calibration_data_path: str = DEFAULT_CALIBRATION_DATA) -> Dict[str, Any]:
     """
+    Performs the same function as search.py
+
     Perform conformal prediction on the embeddings with control for either FDR or FNR.
     
     Args:
-        embeddings: NumPy array of embeddings
+        embeddings: NumPy array of embeddings (from embed_sequences)
         risk_tolerance: Risk level alpha (0.01-0.2)
         risk_type: Type of risk to control - "fdr" (False Discovery Rate) or "fnr" (False Negative Rate)
         calibration_data_path: Path to calibration data CSV
+
+    What it does:
+        - Loads pre-computed calibration data from CSV
+        - Calculates similarity between query embeddings and database
+        - Determines confidence thresholds based on risk type (FDR/FNR)
+        - Applies conformal prediction methods for statistical guarantees
+        - Returns matches with confidence scores
         
     Returns:
         Dictionary containing prediction results
@@ -435,6 +452,13 @@ def run_search(query_embeddings: np.ndarray,
     
     progress(1.0, desc="Search completed!")
     return results
+
+
+"""
+~~~~~~~~~~~~~~~~~~~~
+BELOW ARE CODE MAINLY FOR GENERATING THE GRADIO WEBSITE USER INTERFACE   
+~~~~~~~~~~~~~~~~~~~~
+"""
 
 def generate_error_curve_plot(X_cal: np.ndarray, y_cal: np.ndarray, 
                             risk_type: str, threshold: float, 
@@ -774,115 +798,115 @@ def process_input(input_text: str,
         error_message = {"error": f"Error during search: {str(e)}"}
         return error_message, [], error_message, None
 
-def save_current_session(session_name: str) -> Dict[str, Any]:
-    """
-    Save the current session to a file.
+# def save_current_session(session_name: str) -> Dict[str, Any]:
+#     """
+#     Save the current session to a file.
     
-    Args:
-        session_name: Name to use for the saved session
+#     Args:
+#         session_name: Name to use for the saved session
         
-    Returns:
-        Dictionary with file path and status
-    """
-    global CURRENT_SESSION
+#     Returns:
+#         Dictionary with file path and status
+#     """
+#     global CURRENT_SESSION
     
-    if not CURRENT_SESSION:
-        return {"error": "No active session to save"}
+#     if not CURRENT_SESSION:
+#         return {"error": "No active session to save"}
     
-    try:
-        # Ensure session_name has .json extension
-        if not session_name.endswith(".json"):
-            session_name = f"{session_name}.json"
+#     try:
+#         # Ensure session_name has .json extension
+#         if not session_name.endswith(".json"):
+#             session_name = f"{session_name}.json"
         
-        # Create a directory for saved sessions if it doesn't exist
-        os.makedirs("saved_sessions", exist_ok=True)
-        file_path = os.path.join("saved_sessions", session_name)
+#         # Create a directory for saved sessions if it doesn't exist
+#         os.makedirs("saved_sessions", exist_ok=True)
+#         file_path = os.path.join("saved_sessions", session_name)
         
-        # Save the session (simplified implementation)
-        with open(file_path, 'w') as f:
-            import json
-            json.dump(CURRENT_SESSION, f)
+#         # Save the session (simplified implementation)
+#         with open(file_path, 'w') as f:
+#             import json
+#             json.dump(CURRENT_SESSION, f)
         
-        return {
-            "success": True,
-            "message": f"Session saved as {session_name}",
-            "file_path": file_path
-        }
+#         return {
+#             "success": True,
+#             "message": f"Session saved as {session_name}",
+#             "file_path": file_path
+#         }
     
-    except Exception as e:
-        return {
-            "error": f"Error saving session: {str(e)}"
-        }
+#     except Exception as e:
+#         return {
+#             "error": f"Error saving session: {str(e)}"
+#         }
 
-def load_saved_session(file_obj) -> Dict[str, Any]:
-    """
-    Load a saved session from a file.
+# def load_saved_session(file_obj) -> Dict[str, Any]:
+#     """
+#     Load a saved session from a file.
     
-    Args:
-        file_obj: Uploaded session file
+#     Args:
+#         file_obj: Uploaded session file
         
-    Returns:
-        Dictionary with session data formatted for display
-    """
-    global CURRENT_SESSION
+#     Returns:
+#         Dictionary with session data formatted for display
+#     """
+#     global CURRENT_SESSION
     
-    if not file_obj:
-        return {"error": "No file selected"}, None, None, None
+#     if not file_obj:
+#         return {"error": "No file selected"}, None, None, None
     
-    try:
-        # Read the file content
-        import json
-        content = file_obj.read()
-        if isinstance(content, bytes):
-            content = content.decode('utf-8')
+#     try:
+#         # Read the file content
+#         import json
+#         content = file_obj.read()
+#         if isinstance(content, bytes):
+#             content = content.decode('utf-8')
         
-        # Parse the JSON content
-        session_data = json.loads(content)
+#         # Parse the JSON content
+#         session_data = json.loads(content)
         
-        # Store in global session
-        CURRENT_SESSION = session_data
+#         # Store in global session
+#         CURRENT_SESSION = session_data
         
-        # Prepare results for the three outputs (summary, table, full JSON)
-        if "results" in session_data:
-            results = session_data["results"]
+#         # Prepare results for the three outputs (summary, table, full JSON)
+#         if "results" in session_data:
+#             results = session_data["results"]
             
-            # Data for the results summary
-            summary = {
-                "message": results.get("message", ""),
-                "num_matches": results.get("num_matches", 0),
-                "summary": {
-                    "total_results": results.get("num_matches", 0),
-                    "note": f"Found {results.get('num_matches', 0)} total matches. All results are displayed and can be sorted by clicking on column headers."
-                },
-                "all_results": results.get("all_results", "")
-            }
+#             # Data for the results summary
+#             summary = {
+#                 "message": results.get("message", ""),
+#                 "num_matches": results.get("num_matches", 0),
+#                 "summary": {
+#                     "total_results": results.get("num_matches", 0),
+#                     "note": f"Found {results.get('num_matches', 0)} total matches. All results are displayed and can be sorted by clicking on column headers."
+#                 },
+#                 "all_results": results.get("all_results", "")
+#             }
             
-            # Data for the results table - ALL matches, formatted as list of lists
-            matches = results.get("matches", []) if "matches" in results else []
-            table_data = []
-            for match in matches:
-                row = [
-                    match.get("query_idx", ""),
-                    match.get("lookup_seq", ""),
-                    match.get("D_score", ""),
-                    match.get("lookup_entry", ""),
-                    match.get("lookup_pfam", ""),
-                    match.get("lookup_protein_names", "")
-                ]
-                table_data.append(row)
+#             # Data for the results table - ALL matches, formatted as list of lists
+#             matches = results.get("matches", []) if "matches" in results else []
+#             table_data = []
+#             for match in matches:
+#                 row = [
+#                     match.get("query_idx", ""),
+#                     match.get("lookup_seq", ""),
+#                     match.get("D_score", ""),
+#                     match.get("lookup_entry", ""),
+#                     match.get("lookup_pfam", ""),
+#                     match.get("lookup_protein_names", "")
+#                 ]
+#                 table_data.append(row)
             
-            # Return all three components
-            return {
-                "success": True,
-                "message": "Session loaded successfully"
-            }, summary, table_data, results
-        else:
-            return {"error": "Invalid session format"}, None, None, None
+#             # Return all three components
+#             return {
+#                 "success": True,
+#                 "message": "Session loaded successfully"
+#             }, summary, table_data, results
+#         else:
+#             return {"error": "Invalid session format"}, None, None, None
     
-    except Exception as e:
-        return {
-            "error": f"Error loading session: {str(e)}"
-        }, None, None, None
+#     except Exception as e:
+#         return {
+#             "error": f"Error loading session: {str(e)}"
+#         }, None, None, None
 
 def export_current_results(format_type: str) -> Dict[str, Any]:
     """
