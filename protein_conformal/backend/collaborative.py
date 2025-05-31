@@ -1,12 +1,11 @@
 """
-Collaborative features for protein conformal prediction.
+this file is not used. 
 
-I had plans for session saving and loading, report generation and sharing,
-potentially collaborative workflows.
+I had plans for report generation and sharing, and potentially collaborative workflows 
+It uses fastapi to create a backend server, and gradio to create a frontend user interface.
 
-but I dont really think these are needed for the app. 
-so some code in this file isnt used (actually, none of them are used atm)
-keeping it here in case in the future, we want to enable a seperate backend API server.
+but I dont really think these are needed for the app, so none of this file is used anywhere
+but I'm keeping it here in case in the future, we want to enable a seperate backend API server.
 """
 
 import json
