@@ -2,18 +2,24 @@
 Precompute FDR lambda thresholds for different alpha values.
 
 This script generates a lookup table of lambda threshold values for different alpha levels
-(FDR control parameters), saving them to a CSV file for easy use in the search pipeline.
+(FDR control parameters), computing both exact and partial FDR values in a single CSV file.
 """
 
 import numpy as np
 import pandas as pd
 import argparse
+import sys
+import os
 import tqdm
-from protein_conformal.util import get_thresh_FDR, get_sims_labels
+
+# Add the parent directory to Python path to find protein_conformal module
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from protein_conformal.util import get_thresh_FDR, get_sims_labels, risk
 
 def main(args):
-    # Create DataFrame to store results
-    fdr_thresholds = pd.DataFrame(columns=["alpha", "lambda_threshold", "empirical_fdr"])
+    # Create DataFrame to store results with both exact and partial FDR
+    fdr_thresholds = pd.DataFrame(columns=["alpha", "lambda_threshold", "exact_fdr", "partial_fdr"])
     
     # Load calibration data
     print(f"Loading calibration data from {args.cal_data}")
@@ -25,24 +31,35 @@ def main(args):
     np.random.shuffle(data)
     cal_data = data[:n_calib]
     
-    # Get calibration features and labels
-    X_cal, y_cal = get_sims_labels(cal_data, partial=False)
+    # Get calibration features and labels for both exact and partial matches
+    X_cal_exact, y_cal_exact = get_sims_labels(cal_data, partial=False)
+    X_cal_partial, y_cal_partial = get_sims_labels(cal_data, partial=True)
     
     # Loop through alpha values from 0.01 to 0.2
     alpha_values = np.linspace(0.01, 0.2, args.n_alpha)
     
     print(f"Computing thresholds for {len(alpha_values)} alpha values between {alpha_values[0]} and {alpha_values[-1]}")
     for alpha in tqdm.tqdm(alpha_values, desc="Computing FDR thresholds"):
-        # Compute lambda threshold using get_thresh_FDR
-        lambda_threshold, empirical_fdr = get_thresh_FDR(
-            y_cal, X_cal, alpha, args.delta, N=args.N
+        # Compute lambda threshold using get_thresh_FDR for exact matches
+        lambda_threshold_exact, exact_fdr = get_thresh_FDR(
+            y_cal_exact, X_cal_exact, alpha, args.delta, N=args.N
         )
+        
+        # Compute lambda threshold using get_thresh_FDR for partial matches  
+        lambda_threshold_partial, partial_fdr = get_thresh_FDR(
+            y_cal_partial, X_cal_partial, alpha, args.delta, N=args.N
+        )
+        
+        # Use the exact match threshold as the primary threshold
+        # Then compute what the actual FDR would be for partial matches using that threshold
+        actual_partial_fdr = risk(X_cal_partial, y_cal_partial, lambda_threshold_exact)
         
         # Add to DataFrame
         new_row = pd.DataFrame({
             "alpha": [alpha],
-            "lambda_threshold": [lambda_threshold],
-            "empirical_fdr": [empirical_fdr]
+            "lambda_threshold": [lambda_threshold_exact],  # Use exact match threshold
+            "exact_fdr": [exact_fdr],
+            "partial_fdr": [actual_partial_fdr]  # FDR for partial matches using exact threshold
         })
         fdr_thresholds = pd.concat([fdr_thresholds, new_row], ignore_index=True)
     
@@ -54,7 +71,7 @@ def main(args):
     print(fdr_thresholds.head())
 
 def parse_args():
-    parser = argparse.ArgumentParser("Precompute FDR lambda thresholds for different alpha values")
+    parser = argparse.ArgumentParser("Precompute FDR lambda thresholds for different alpha values with both exact and partial FDR")
     
     parser.add_argument(
         "--cal_data",
@@ -66,7 +83,7 @@ def parse_args():
         "--output",
         type=str,
         default="./results/fdr_thresholds.csv",
-        help="Output file for the FDR threshold table"
+        help="Output file for the combined FDR threshold table (exact and partial)"
     )
     parser.add_argument(
         "--n_alpha",
@@ -88,13 +105,13 @@ def parse_args():
     parser.add_argument(
         "--n_calib",
         type=int,
-        default=1000,
+        default=100,
         help="Number of calibration data points from the dataset to use, same use as n_calib in precompute_SVA_probs.py"
     )
     parser.add_argument(
         "--N",
         type=int,
-        default=100,
+        default=20,
         help="Number of search iterations for get_thresh_FDR"
     )
     
