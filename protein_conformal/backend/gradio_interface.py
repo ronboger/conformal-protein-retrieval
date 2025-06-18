@@ -15,8 +15,6 @@ import io
 import pandas as pd
 from Bio import SeqIO
 from typing import List, Union, Tuple, Dict, Optional, Any, Set
-from PIL import Image
-import base64
 
 from protein_conformal.util import load_database, query, read_fasta, get_sims_labels, get_thresh_new_FDR, get_thresh_new, risk, calculate_false_negatives, simplifed_venn_abers_prediction
 import matplotlib.pyplot as plt
@@ -243,82 +241,8 @@ def run_search(query_embeddings: np.ndarray,
 
 
 """
-~~~~~~~~~~~~~~~~~~~~
-BELOW ARE CODE MAINLY FOR GENERATING THE GRADIO WEBSITE USER INTERFACE   
-~~~~~~~~~~~~~~~~~~~~
+Below are code for I/O and generating gradio website
 """
-
-def generate_error_curve_plot(X_cal: np.ndarray, y_cal: np.ndarray, 
-                            risk_type: str, threshold: float, 
-                            alpha: float) -> str:
-    """
-    Generate a plot of the error curve (FDR or FNR) vs threshold.
-    
-    Args:
-        X_cal: Calibration similarities
-        y_cal: Calibration labels
-        risk_type: 'fdr' or 'fnr'
-        threshold: Conformal threshold selected
-        alpha: Risk tolerance level
-        
-    Returns:
-        Base64-encoded PNG image of the plot
-    """
-    plt.figure(figsize=(8, 5))
-    
-    # Generate a range of thresholds spanning the calibration data
-    min_sim, max_sim = X_cal.min(), X_cal.max()
-    lambdas = np.linspace(min_sim, max_sim, 100)
-    
-    # Calculate the error rate for each threshold
-    if risk_type.lower() == 'fdr':
-        # Calculate FDR for each lambda
-        risks = [risk(X_cal, y_cal, lam) for lam in lambdas]
-        plt.plot(lambdas, risks, 'b-', label='False Discovery Rate (FDR)')
-        plt.ylabel('FDR (False Discovery Rate)')
-    else:
-        # Calculate FNR for each lambda
-        fnrs = [calculate_false_negatives(X_cal, y_cal, lam) for lam in lambdas]
-        plt.plot(lambdas, fnrs, 'r-', label='False Negative Rate (FNR)')
-        plt.ylabel('FNR (False Negative Rate)')
-    
-    # Mark the selected threshold and risk level
-    plt.axvline(x=threshold, color='green', linestyle='--', label=f'Selected threshold: {threshold:.6f}')
-    plt.axhline(y=alpha, color='orange', linestyle=':', label=f'Alpha: {alpha:.2f}')
-    
-    plt.xlabel('Similarity Threshold')
-    plt.title(f'{risk_type.upper()} vs Similarity Threshold')
-    plt.grid(True, linestyle='--', alpha=0.7)
-    plt.legend()
-    
-    # Convert plot to base64 image
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=100)
-    buf.seek(0)
-    plt.close()
-    
-    return base64.b64encode(buf.read()).decode('utf-8')
-
-def base64_to_image(base64_str: Optional[str]) -> Optional[Image.Image]:
-    """
-    Convert a base64 string to a PIL Image object.
-    
-    Args:
-        base64_str: Base64-encoded string of an image
-        
-    Returns:
-        PIL Image object or None if conversion fails
-    """
-    if not base64_str:
-        return None
-    
-    try:
-        image_data = base64.b64decode(base64_str)
-        return Image.open(io.BytesIO(image_data))
-    except Exception as e:
-        print(f"Error converting base64 to image: {str(e)}")
-        return None
-
 def process_input(input_text: str, 
                   fasta_text: str,
                   upload_file: Optional[Any], 
@@ -331,7 +255,7 @@ def process_input(input_text: str,
                   metadata_db: str = DEFAULT_LOOKUP_METADATA,
                   custom_lookup_upload: Optional[Any] = None,
                   custom_metadata_upload: Optional[Any] = None,
-                  progress=gr.Progress()) -> Tuple[Dict[str, Any], List[List[Any]], Dict[str, Any], Optional[Image.Image]]:
+                  progress=gr.Progress()) -> Tuple[Dict[str, Any], pd.DataFrame]:
     """
     Process the input and generate predictions.
     
@@ -355,7 +279,6 @@ def process_input(input_text: str,
         - Summary information (for the summary JSON display)
         - Table data (for the DataFrame display)
         - Complete results (for the raw JSON output)
-        - Error curve plot image (PIL Image object)
     """
     # Step 1: Get sequences from FASTA input
     sequences = []
@@ -364,11 +287,14 @@ def process_input(input_text: str,
     elif fasta_text and fasta_text.strip():
         sequences = parse_fasta(fasta_text)
     else:
-        return {"error": "No FASTA input provided. Please enter FASTA content or upload a FASTA file."}, [], {"error": "No FASTA input provided. Please enter FASTA content or upload a FASTA file."}, None
-    
+        return {"error": "No FASTA input provided. Please enter FASTA content or upload a FASTA file."}, pd.DataFrame()
+
     if not sequences and custom_embeddings is None:
-        return {"error": "No sequences found in the FASTA input. Please check your input format."}, [], {"error": "No sequences found in the FASTA input. Please check your input format."}, None
-    
+        return {"error": "No sequences found in the FASTA input. Please check your input format."}, pd.DataFrame()
+
+    # Ensure conformal_results is initialized
+    conformal_results = {}
+
     # Step 2: Get embeddings
     if use_protein_vec and not custom_embeddings:
         try:
@@ -376,7 +302,7 @@ def process_input(input_text: str,
             embeddings = run_embed_protein_vec(sequences, progress)
             progress(0.6, desc="Embeddings complete!")
         except Exception as e:
-            return {"error": f"Error generating embeddings: {str(e)}"}, [], {"error": f"Error generating embeddings: {str(e)}"}, None
+            return {"error": f"Error generating embeddings: {str(e)}"}, pd.DataFrame()
     elif custom_embeddings:
         try:
             progress(0.2, desc="Loading custom embeddings...")
@@ -389,9 +315,9 @@ def process_input(input_text: str,
             os.unlink(tmp_path)  # Clean up temp file
             progress(0.4, desc="Custom embeddings loaded!")
         except Exception as e:
-            return {"error": f"Error loading embeddings: {str(e)}"}, [], {"error": f"Error loading embeddings: {str(e)}"}, None
+            return {"error": f"Error loading embeddings: {str(e)}"}, pd.DataFrame()
     else:
-        return {"error": "Either Protein-Vec must be enabled or custom embeddings must be provided"}, [], {"error": "Either Protein-Vec must be enabled or custom embeddings must be provided"}, None
+        return {"error": "Either Protein-Vec must be enabled or custom embeddings must be provided"}, pd.DataFrame()
     
     # Handle custom uploaded database files if present
     if custom_lookup_upload is not None:
@@ -402,8 +328,8 @@ def process_input(input_text: str,
                 f.write(custom_lookup_upload.read())
             lookup_db = CUSTOM_UPLOAD_EMBEDDING
         except Exception as e:
-            return {"error": f"Error processing custom database: {str(e)}"}, [], {"error": f"Error processing custom database: {str(e)}"}, None
-    
+            return {"error": f"Error processing custom database: {str(e)}"}, pd.DataFrame()
+
     if custom_metadata_upload is not None:
         try:
             # Save the uploaded metadata file to a temporary location
@@ -412,7 +338,7 @@ def process_input(input_text: str,
                 f.write(custom_metadata_upload.read())
             metadata_db = CUSTOM_UPLOAD_METADATA
         except Exception as e:
-            return {"error": f"Error processing custom metadata: {str(e)}"}, [], {"error": f"Error processing custom metadata: {str(e)}"}, None
+            return {"error": f"Error processing custom metadata: {str(e)}"}, pd.DataFrame()
     
     # Step 3: Perform conformal prediction
     try:
@@ -448,62 +374,33 @@ def process_input(input_text: str,
                                   "Useful when you want to minimize missing true relationships, even at the "
                                   "cost of including some false positives.")
             
-            conformal_results = {
-                "message": f"Used precomputed threshold for {risk_description} control, risk level alpha {risk_value}",
-                "threshold": float(threshold),
-                "risk_type": risk_type.lower(),
-                "risk_description": risk_description,
-                "risk_formula": risk_formula,
-                "risk_explanation": risk_explanation,
-                "empirical_risk": float(empirical_risk),
-                "n_matches": 0,  # Will be updated after search
-                "match_rate": 0.0,  # Will be updated after search
-                "n_calib": len(threshold_df),
-                "match_info": [],  # Will be populated after search
-                "has_probability_calibration": False,  # Will be set to True later if used
-                "probability_calibration_method": "Venn-Abers prediction with isotonic regression"
-            }
+        conformal_results = {
+            "message": f"Used precomputed threshold for {risk_description} control, risk level alpha {risk_value}",
+            "threshold": float(threshold),
+            "risk_type": risk_type.lower(),
+            "risk_description": risk_description,
+            "risk_formula": risk_formula,
+            "risk_explanation": risk_explanation,
+            "empirical_risk": float(empirical_risk),
+            "n_matches": 0,  # Will be updated after search
+            "match_rate": 0.0,  # Will be updated after search
+            "n_calib": len(threshold_df),
+            "match_info": [],  # Will be populated after search
+            "has_probability_calibration": False,  # Will be set to True later if used
+            "probability_calibration_method": "Venn-Abers prediction with isotonic regression"
+        }
 
         if "error" in conformal_results:
-            return conformal_results, [], conformal_results, None
-        
-        # After performing conformal prediction, generate the error curve visualization
-        try:
-            # Load calibration data for visualization from CSV
-            cal_df = pd.read_csv(DEFAULT_CALIBRATION_DATA)
-            
-            # Extract similarity scores and labels for visualization
-            X_cal = cal_df['similarity'].values.reshape(-1, 1)
-            
-            # Use exact match probabilities by default
-            y_cal = np.where(cal_df['prob_exact_p1'] > 0.5, 1, 0).reshape(-1, 1)
-            
-            # Generate error curve plot
-            progress(0.65, desc="Generating error curve visualization...")
-            error_curve_plot = generate_error_curve_plot(
-                X_cal, y_cal, 
-                risk_type.lower(), 
-                conformal_results["threshold"],
-                risk_value
-            )
-            
-            # Add visualization to results
-            conformal_results["error_curve_plot"] = error_curve_plot
-            
-        except Exception as e:
-            # If visualization fails, just log the error and continue
-            print(f"Error generating visualization: {str(e)}")
-            conformal_results["error_curve_plot"] = None
-        
+            return conformal_results, pd.DataFrame()
+
         # Step 4: Run the search against the database with the threshold
         progress(0.7, desc=f"Searching database with conformal threshold...")
         
-        # Run search with the conformal prediction threshold
         results_df = run_search(
             embeddings,
             lookup_db,
-            metadata_db,  # Use metadata_db here instead of lookup_metadata_path
-            threshold=conformal_results["threshold"],
+            metadata_db,
+            threshold=conformal_results.get("threshold", 0.0),
             k=1000,
             progress=progress
         )
@@ -557,7 +454,6 @@ def process_input(input_text: str,
             "empirical_risk": conformal_results["empirical_risk"],
             "n_calib": conformal_results["n_calib"],
             "match_rate": conformal_results["match_rate"],
-            "error_curve_plot": conformal_results.get("error_curve_plot")
         }
         
         # 2. Table data for the DataFrame display - convert ALL matches to list of lists for better Gradio compatibility
@@ -600,16 +496,11 @@ def process_input(input_text: str,
             }
         }
         
-        # Extract the base64 image for display
-        error_curve_image = conformal_results.get("error_curve_plot")
-        # Convert base64 to PIL image for display
-        error_curve_pil = base64_to_image(error_curve_image)
-        
         progress(1.0, desc="Conformal prediction complete!")
-        return summary, table_data, complete_results, error_curve_pil
+        return summary, results_df
     except Exception as e:
         error_message = {"error": f"Error during search: {str(e)}"}
-        return error_message, [], error_message, None
+        return error_message, pd.DataFrame()
 
 def export_current_results(format_type: str) -> Dict[str, Any]:
     """
@@ -850,19 +741,7 @@ def create_interface():
                 with gr.Column():
                     # Conformal prediction summary
                     results_summary = gr.JSON(label="Conformal Prediction Results")
-                    
-                    # Add a threshold and risk visualization
-                    with gr.Row():
-                        with gr.Column():
-                            gr.Markdown("### Conformal Risk Control")
-                            gr.Markdown("""
-                            The chart below shows the relationship between similarity threshold values and the resulting error rates (FDR or FNR).
-                            The dashed line represents your selected risk level alpha.
-                            """)
                         
-                    # Placeholder for visualization (will be implemented in a later update)
-                    risk_plot = gr.Image(label="Error Rate vs Threshold", type="pil")
-                    
                     # Add a DataFrame for displaying results in a tabular format
                     results_table = gr.Dataframe(
                         headers=["query_idx", "lookup_seq", "D_score", "probability", "lookup_entry", "lookup_pfam", "lookup_protein_names"],
@@ -929,7 +808,7 @@ def create_interface():
                 use_protein_vec, custom_embeddings,
                 lookup_db, metadata_db, custom_lookup_upload, custom_metadata_upload
             ],
-            outputs=[results_summary, results_table, output, risk_plot]
+            outputs=[results_summary, results_table]
         )
         
         # Database selection event handler
@@ -968,4 +847,4 @@ def create_interface():
 
 if __name__ == "__main__":
     interface = create_interface()
-    interface.launch(share=False) 
+    interface.launch(share=False)
