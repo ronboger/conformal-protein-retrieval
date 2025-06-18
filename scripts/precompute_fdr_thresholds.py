@@ -93,7 +93,7 @@ def parse_args():
     parser.add_argument(
         "--n_calib",
         type=int,
-        default=500,
+        default=100,
         help="Number of calibration data points from the dataset to use, same use as n_calib in precompute_SVA_probs.py"
     )
     parser.add_argument(
