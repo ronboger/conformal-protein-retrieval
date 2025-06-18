@@ -13,8 +13,6 @@ matplotlib.use('Agg')
 # it can render plots to files (like PNGs) without requiring a gui
 
 from protein_conformal.backend.gradio_interface import create_interface
-from protein_conformal.util import load_database, query, read_fasta, get_sims_labels
-from protein_conformal.util import get_thresh_new_FDR, get_thresh_new, risk, calculate_false_negatives, simplifed_venn_abers_prediction
 
 def main():
     parser = argparse.ArgumentParser(description='Protein Conformal Prediction Gradio App')
