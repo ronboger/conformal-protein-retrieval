@@ -23,7 +23,7 @@ exported_reports/
 inter_results/
 saved_sessions/
 protein_vec_models/
-
+ignore/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

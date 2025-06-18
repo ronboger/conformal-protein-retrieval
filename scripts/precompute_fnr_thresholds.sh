@@ -1,12 +1,9 @@
 #!/bin/bash
 
-# Precompute FNR lambda thresholds for different alpha values
-# This script generates lookup tables for FNR thresholds using inline Python
-
-# Set default parameters
+# default parameters
 CAL_DATA="${CAL_DATA:-./data/calibration/pfam_new_proteins.npy}"
 OUTPUT_DIR="${OUTPUT_DIR:-./results}"
-N_ALPHA="${N_ALPHA:-20}"
+N_ALPHA="${N_ALPHA:-100}"
 N_CALIB="${N_CALIB:-100}"
 
 # Create output directory if it doesn't exist

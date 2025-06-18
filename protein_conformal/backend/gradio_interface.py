@@ -7,41 +7,24 @@ and perform conformal prediction with statistical guarantees.
 """
 
 import gradio as gr
-import torch
 import numpy as np
 import os
 import sys
-import gc
 import tempfile
 import io
 import pandas as pd
 from Bio import SeqIO
-from transformers import T5EncoderModel, T5Tokenizer
 from typing import List, Union, Tuple, Dict, Optional, Any, Set
 from PIL import Image
 import base64
 
-# Add the protein_vec_models directory to Python's path
-sys.path.append("protein_vec_models")
-# allows pythoin to find and import modules from that directory
-try:
-    from model_protein_moe import trans_basic_block, trans_basic_block_Config
-    from utils_search import featurize_prottrans, embed_vec
-except ImportError:
-    print("Warning: Could not import Protein-Vec models. Make sure 'protein_vec_models' directory exists.")
-
-# Add the protein_conformal directory to path for using utility functions
 from protein_conformal.util import load_database, query, read_fasta, get_sims_labels, get_thresh_new_FDR, get_thresh_new, risk, calculate_false_negatives, simplifed_venn_abers_prediction
-
-# Add matplotlib for plotting
 import matplotlib.pyplot as plt
 
-# Pre-embedded database paths
 DEFAULT_LOOKUP_EMBEDDING = "./data/lookup_embeddings.npy" # default path to the UniProt lookup embeddings 
 DEFAULT_LOOKUP_METADATA = "./data/lookup_embeddings_meta_data.tsv" # default path to the UniProt lookup metadata
 DEFAULT_CALIBRATION_DATA = "./results/calibration_probs.csv" # default path to the calibration data
 
-# First, add constants for the SCOPE database files at the top of the file, near the other DEFAULT constants
 DEFAULT_SCOPE_EMBEDDING = "./data/lookup/scope_lookup_embeddings.npy" # default path to the SCOPE lookup embeddings
 DEFAULT_SCOPE_METADATA = "./data/lookup/scope_lookup.fasta" # default path to the SCOPE lookup metadata
 
@@ -56,57 +39,11 @@ SPECIAL_CHARS = set('XUB')  # X=unknown, U=selenocysteine, B=ambiguous D/N
 # Global session storage for the current Gradio instance
 CURRENT_SESSION = {}
 
-def load_models(progress=gr.Progress()):
-    """
-    Load the ProtTrans and Protein-Vec models.
-    
-    Args:
-        progress: Gradio progress bar to show the user when loading
-        
-    Returns:
-        tuple: (tokenizer, model, model_deep, device)
-               - tokenizer: The ProtTrans tokenizer.
-               - model: The ProtTrans encoder model.
-               - model_deep: The Protein-Vec model.
-               - device: The computation device (CPU or CUDA GPU).
-    """
-    progress(0.1, desc="Initializing...")
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    
-    progress(0.2, desc="Loading ProtTrans tokenizer...")
-    tokenizer = T5Tokenizer.from_pretrained("Rostlab/prot_t5_xl_uniref50", do_lower_case=False)
-    
-    progress(0.4, desc="Loading ProtTrans model...")
-    model = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_uniref50")
-    model = model.to(device)
-    model = model.eval()
-    
-    progress(0.6, desc="Cleaning memory...")
-    gc.collect()
-    
-    progress(0.7, desc="Loading Protein-Vec model...")
-    # Protein-Vec MOE model checkpoint and config
-    vec_model_cpnt = os.path.join("protein_vec_models", 'protein_vec.ckpt')
-    vec_model_config = os.path.join("protein_vec_models", 'protein_vec_params.json')
-    
-    # Load the Protein-Vec model
-    vec_model_config = trans_basic_block_Config.from_json(vec_model_config)
-    model_deep = trans_basic_block.load_from_checkpoint(vec_model_cpnt, config=vec_model_config)
-    model_deep = model_deep.to(device)
-    model_deep = model_deep.eval()
-    
-    progress(1.0, desc="Models loaded successfully!")
-    return tokenizer, model, model_deep, device
+
 
 def parse_fasta(fasta_content: str) -> List[str]:
-    """
-    Parse FASTA content to extract sequences.
-    
-    Args:
-        fasta_content: String containing FASTA formatted sequences
-        
-    Returns:
-        List of protein sequences
+    """ 
+    takes in FASTA and returns list of protein sequences
     """
     sequences = []
     fasta_file = io.StringIO(fasta_content)
@@ -116,13 +53,7 @@ def parse_fasta(fasta_content: str) -> List[str]:
 
 def process_uploaded_file(file_obj) -> List[str]:
     """
-    Process an uploaded FASTA file.
-    
-    Args:
-        file_obj: Uploaded file object
-        
-    Returns:
-        List of protein sequences
+    process uploaded FASTA file
     """
     sequences = []
     with tempfile.NamedTemporaryFile(suffix='.fasta', delete=False) as tmp:
@@ -135,204 +66,61 @@ def process_uploaded_file(file_obj) -> List[str]:
     os.unlink(tmp_path)  # Clean up temp file
     return sequences
 
-def embed_sequences(sequences: List[str], # Defines a function to generate embeddings for protein sequences.
-                    tokenizer, # The ProtTrans tokenizer.
-                    model, # The ProtTrans encoder model.
-                    model_deep, # The Protein-Vec model.
-                    device, # The computation device (CPU/GPU).
-                    progress=gr.Progress()) -> np.ndarray: # Gradio progress bar. Returns a NumPy array of embeddings.
+def run_embed_protein_vec(sequences: List[str], progress=gr.Progress()) -> np.ndarray:
     """
-    Ferforms the same function as embed_protein_vec.py
-
-    Converts raw protein sequences into numerical embeddings (vectors) by running it through 
-    ProtTrans, then further process with Protein-Vec
+    use existing embed_protein_vec.py to generate embeddings
     
     Args:
         sequences: List of protein sequences
-        tokenizer: ProtTrans tokenizer
-        model: ProtTrans model
-        model_deep: Protein-Vec model
-        device: Computation device (CPU/GPU)
         progress: Gradio progress bar
         
     Returns:
         NumPy array of embeddings
     """
-    # This is a forward pass of the Protein-Vec model
-    # Every aspect is turned on (therefore no masks)
-    sampled_keys = np.array(['TM', 'PFAM', 'GENE3D', 'ENZYME', 'MFO', 'BPO', 'CCO'])
-    all_cols = np.array(['TM', 'PFAM', 'GENE3D', 'ENZYME', 'MFO', 'BPO', 'CCO'])
-    masks = [all_cols[k] in sampled_keys for k in range(len(all_cols))]
-    masks = torch.logical_not(torch.tensor(masks, dtype=torch.bool))[None,:]
+    import subprocess
+    import sys
     
-    # Loop through the sequences and embed them using protein-vec
-    embed_all_sequences = []
-    total = len(sequences)
+    # Create temporary FASTA file
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.fasta', delete=False) as tmp_fasta:
+        for i, seq in enumerate(sequences):
+            tmp_fasta.write(f">seq_{i}\n{seq}\n")
+        tmp_fasta_path = tmp_fasta.name
     
-    for i, sequence in enumerate(sequences):
-        progress((i+1)/total, desc=f"Embedding sequence {i+1}/{total}")
-        protrans_sequence = featurize_prottrans([sequence], model, tokenizer, device)
-        embedded_sequence = embed_vec(protrans_sequence, model_deep, masks, device)
-        embed_all_sequences.append(embedded_sequence)
+    # Create temporary output file for embeddings
+    with tempfile.NamedTemporaryFile(suffix='.npy', delete=False) as tmp_out:
+        tmp_out_path = tmp_out.name
     
-    # Combine the embedding vectors into an array
-    seq_embeddings = np.concatenate(embed_all_sequences)
-    return seq_embeddings
-
-def perform_conformal_prediction(embeddings: np.ndarray, 
-                                 risk_tolerance: float, 
-                                 risk_type: str = "fdr",
-                                 calibration_data_path: str = DEFAULT_CALIBRATION_DATA) -> Dict[str, Any]:
-    """
-    Performs the same function as search.py
-
-    Perform conformal prediction on the embeddings with control for either FDR or FNR.
-    
-    Args:
-        embeddings: NumPy array of embeddings (from embed_sequences)
-        risk_tolerance: Risk level alpha (0.01-0.2)
-        risk_type: Type of risk to control - "fdr" (False Discovery Rate) or "fnr" (False Negative Rate)
-        calibration_data_path: Path to calibration data CSV
-
-    What it does:
-        - Loads pre-computed calibration data from CSV
-        - Calculates similarity between query embeddings and database
-        - Determines confidence thresholds based on risk type (FDR/FNR)
-        - Applies conformal prediction methods for statistical guarantees
-        - Returns matches with confidence scores
-        
-    Returns:
-        Dictionary containing prediction results
-    """
     try:
-        # Load calibration data from CSV file
-        try:
-            cal_df = pd.read_csv(calibration_data_path)
-            
-            # Extract similarity scores and labels
-            X_cal = cal_df['similarity'].values.reshape(-1, 1)
-            
-            # Use exact match probabilities by default
-            # For partial matches, we'd use prob_partial_p0 and prob_partial_p1
-            y_cal = np.where(cal_df['prob_exact_p1'] > 0.5, 1, 0).reshape(-1, 1)
-            
-            print(f"Loaded calibration data with {len(X_cal)} points from CSV")
-            
-        except (KeyError, IndexError, TypeError, pd.errors.EmptyDataError) as e:
-            # Handle case where the CSV file is not properly formatted or empty
-            print(f"Error loading calibration data from CSV: {str(e)}")
-            return {
-                "error": f"Failed to load calibration data: {str(e)}"
-            }
+        progress(0.2, desc="Running embed_protein_vec.py...")
         
-        # Calculate similarity between query embeddings and database
-        from sklearn.metrics.pairwise import cosine_similarity
-        similarity_matrix = cosine_similarity(embeddings)
+        # Run the embed_protein_vec.py script
+        cmd = [
+            sys.executable, 
+            "protein_conformal/embed_protein_vec.py",
+            "--input_file", tmp_fasta_path,
+            "--output_file", tmp_out_path,
+            "--path_to_protein_vec", "protein_vec_models"
+        ]
         
-        # Choose appropriate threshold based on risk type (FDR or FNR)
-        if risk_type.lower() == "fdr":
-            # For FDR control: control proportion of false discoveries 
-            # FDR = FP / (FP + TP)
-            threshold = get_thresh_new_FDR(X_cal, y_cal, risk_tolerance)
-            risk_description = "False Discovery Rate"
-            risk_formula = "FDR = FP / (FP + TP)"
-            risk_explanation = ("Controls the proportion of false discoveries (incorrect matches) "
-                              "among all retrieved matches. Useful when you want to ensure most "
-                              "retrieved results are correct.")
-        else:  # fnr
-            # For FNR control: control proportion of missed true matches
-            # FNR = FN / (FN + TP)
-            threshold = get_thresh_new(X_cal, y_cal, risk_tolerance)
-            risk_description = "False Negative Rate"
-            risk_formula = "FNR = FN / (FN + TP)"
-            risk_explanation = ("Controls the proportion of missed true matches among all actual matches. "
-                              "Useful when you want to minimize missing true relationships, even at the "
-                              "cost of including some false positives.")
+        # Run the command
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=".")
         
-        # Apply the threshold to get predictions
-        predicted_matches = similarity_matrix >= threshold
+        if result.returncode != 0:
+            raise Exception(f"embed_protein_vec.py failed: {result.stderr}")
         
-        # Calculate metrics for validation (using calibration data)
-        # For FDR, use the risk function to calculate the actual FDR on calibration data
-        if risk_type.lower() == "fdr":
-            empirical_risk = risk(X_cal, y_cal, threshold)
-        else:
-            # For FNR, use the calculate_false_negatives function
-            empirical_risk = calculate_false_negatives(X_cal, y_cal, threshold)
+        progress(0.8, desc="Loading embeddings...")
+        # Load the embeddings
+        embeddings = np.load(tmp_out_path)
         
-        # Calculate metrics on the query data
-        # These are approximate since we don't have ground truth
-        n_matches = np.sum(predicted_matches)
-        match_rate = n_matches / (len(embeddings) * similarity_matrix.shape[1])
+        progress(1.0, desc="Embeddings complete!")
+        return embeddings
         
-        # Calculate isotonic regression probabilities for all similarity scores
-        # Using Venn-Abers method for probability calibration
-        probs_p0 = []
-        probs_p1 = []
-        
-        # Sample a subset of similarity scores for calibration (to save computation)
-        n_samples = min(100, np.sum(predicted_matches))
-        if n_samples > 0:
-            sample_indices = np.random.choice(
-                np.where(predicted_matches.flatten())[0], 
-                size=n_samples, 
-                replace=n_samples > len(np.where(predicted_matches.flatten())[0])
-            )
-            
-            # Calculate calibrated probabilities using Venn-Abers
-            X_cal_flat = X_cal.flatten()
-            y_cal_flat = y_cal.flatten()
-            
-            for idx in sample_indices:
-                sim_score = similarity_matrix.flatten()[idx]
-                p0, p1 = simplifed_venn_abers_prediction(X_cal_flat, y_cal_flat, sim_score)
-                probs_p0.append(p0)
-                probs_p1.append(p1)
-        
-        # Create simulated matches for display (since we don't have ground truth)
-        match_info = []
-        for i in range(len(embeddings)):
-            matches_for_query = []
-            for j in range(similarity_matrix.shape[1]):
-                if predicted_matches[i, j]:
-                    # Use Venn-Abers calibrated probability if available
-                    if probs_p0 and probs_p1:
-                        prob = (probs_p0[0] + probs_p1[0]) / 2  # Use first as example
-                    else:
-                        prob = similarity_matrix[i, j]  # Fallback to similarity
-                        
-                    matches_for_query.append({
-                        "index": j,
-                        "similarity": float(similarity_matrix[i, j]),
-                        "probability": float(prob)
-                    })
-            
-            # Sort matches for this query by similarity
-            matches_for_query.sort(key=lambda x: x["similarity"], reverse=True)
-            match_info.append(matches_for_query)
-        
-        # Return results
-        return {
-            "message": f"Performed conformal prediction with {risk_description} control, risk level alpha {risk_tolerance}",
-            "threshold": float(threshold),
-            "risk_type": risk_type,
-            "risk_description": risk_description,
-            "risk_formula": risk_formula,
-            "risk_explanation": risk_explanation,
-            "empirical_risk": float(empirical_risk),
-            "n_matches": int(n_matches),
-            "match_rate": float(match_rate),
-            "n_calib": len(cal_df),
-            "match_info": match_info,
-            "has_probability_calibration": len(probs_p0) > 0,
-            "probability_calibration_method": "Venn-Abers prediction with isotonic regression"
-        }
-    except Exception as e:
-        import traceback
-        return {
-            "error": f"Error in conformal prediction: {str(e)}",
-            "traceback": traceback.format_exc()
-        }
+    finally:
+        # Clean up temporary files
+        if os.path.exists(tmp_fasta_path):
+            os.unlink(tmp_fasta_path)
+        if os.path.exists(tmp_out_path):
+            os.unlink(tmp_out_path)
 
 def validate_sequence(sequence: str) -> Tuple[bool, str]:
     """
@@ -553,7 +341,7 @@ def process_input(input_text: str,
         upload_file: Uploaded FASTA file
         input_type: Type of input (always "fasta_format" now)
         risk_type: Type of risk to control (FDR or FNR)
-        risk_value: Risk tolerance value (0-20%)
+        risk_value: Risk tolerance value (0.01 - 0.2)
         use_protein_vec: Whether to use Protein-Vec for embeddings
         custom_embeddings: User-uploaded embeddings file
         lookup_db: Path to pre-embedded lookup database
@@ -571,7 +359,6 @@ def process_input(input_text: str,
     """
     # Step 1: Get sequences from FASTA input
     sequences = []
-    # Process FASTA input (either file upload or text)
     if upload_file is not None:
         sequences = process_uploaded_file(upload_file)
     elif fasta_text and fasta_text.strip():
@@ -586,12 +373,7 @@ def process_input(input_text: str,
     if use_protein_vec and not custom_embeddings:
         try:
             progress(0.1, desc="Starting embedding process...")
-            # Load models
-            tokenizer, model, model_deep, device = load_models(progress)
-            
-            # Generate embeddings
-            progress(0.3, desc="Generating embeddings...")
-            embeddings = embed_sequences(sequences, tokenizer, model, model_deep, device, progress)
+            embeddings = run_embed_protein_vec(sequences, progress)
             progress(0.6, desc="Embeddings complete!")
         except Exception as e:
             return {"error": f"Error generating embeddings: {str(e)}"}, [], {"error": f"Error generating embeddings: {str(e)}"}, None
@@ -643,14 +425,45 @@ def process_input(input_text: str,
         
         progress(0.5, desc=f"Performing conformal prediction with {risk_type} control...")
         
-        # Perform conformal prediction
-        conformal_results = perform_conformal_prediction(
-            embeddings,
-            risk_value,
-            risk_type.lower(),
-            calibration_data_path=DEFAULT_CALIBRATION_DATA
-        )
-        
+        if risk_type.lower() == "fdr":
+            threshold_file = "./results/fdr_thresholds.csv"
+            threshold_df = pd.read_csv(threshold_file)
+            closest_idx = (threshold_df['alpha'] - risk_value).abs().idxmin()
+            threshold = threshold_df.iloc[closest_idx]['lambda_threshold']
+            empirical_risk = threshold_df.iloc[closest_idx]['exact_fdr']
+            risk_description = "False Discovery Rate"
+            risk_formula = "FDR = FP / (FP + TP)"
+            risk_explanation = ("Controls the proportion of false discoveries (incorrect matches) "
+                                  "among all retrieved matches. Useful when you want to ensure most "
+                                  "retrieved results are correct.")
+        else:
+            threshold_file = "./results/fnr_thresholds.csv"
+            threshold_df = pd.read_csv(threshold_file)
+            closest_idx = (threshold_df['alpha'] - risk_value).abs().idxmin()
+            threshold = threshold_df.iloc[closest_idx]['lambda_threshold']
+            empirical_risk = threshold_df.iloc[closest_idx]['exact_fnr']
+            risk_description = "False Negative Rate"
+            risk_formula = "FNR = FN / (FN + TP)"
+            risk_explanation = ("Controls the proportion of missed true matches among all actual matches. "
+                                  "Useful when you want to minimize missing true relationships, even at the "
+                                  "cost of including some false positives.")
+            
+            conformal_results = {
+                "message": f"Used precomputed threshold for {risk_description} control, risk level alpha {risk_value}",
+                "threshold": float(threshold),
+                "risk_type": risk_type.lower(),
+                "risk_description": risk_description,
+                "risk_formula": risk_formula,
+                "risk_explanation": risk_explanation,
+                "empirical_risk": float(empirical_risk),
+                "n_matches": 0,  # Will be updated after search
+                "match_rate": 0.0,  # Will be updated after search
+                "n_calib": len(threshold_df),
+                "match_info": [],  # Will be populated after search
+                "has_probability_calibration": False,  # Will be set to True later if used
+                "probability_calibration_method": "Venn-Abers prediction with isotonic regression"
+            }
+
         if "error" in conformal_results:
             return conformal_results, [], conformal_results, None
         
@@ -797,116 +610,6 @@ def process_input(input_text: str,
     except Exception as e:
         error_message = {"error": f"Error during search: {str(e)}"}
         return error_message, [], error_message, None
-
-# def save_current_session(session_name: str) -> Dict[str, Any]:
-#     """
-#     Save the current session to a file.
-    
-#     Args:
-#         session_name: Name to use for the saved session
-        
-#     Returns:
-#         Dictionary with file path and status
-#     """
-#     global CURRENT_SESSION
-    
-#     if not CURRENT_SESSION:
-#         return {"error": "No active session to save"}
-    
-#     try:
-#         # Ensure session_name has .json extension
-#         if not session_name.endswith(".json"):
-#             session_name = f"{session_name}.json"
-        
-#         # Create a directory for saved sessions if it doesn't exist
-#         os.makedirs("saved_sessions", exist_ok=True)
-#         file_path = os.path.join("saved_sessions", session_name)
-        
-#         # Save the session (simplified implementation)
-#         with open(file_path, 'w') as f:
-#             import json
-#             json.dump(CURRENT_SESSION, f)
-        
-#         return {
-#             "success": True,
-#             "message": f"Session saved as {session_name}",
-#             "file_path": file_path
-#         }
-    
-#     except Exception as e:
-#         return {
-#             "error": f"Error saving session: {str(e)}"
-#         }
-
-# def load_saved_session(file_obj) -> Dict[str, Any]:
-#     """
-#     Load a saved session from a file.
-    
-#     Args:
-#         file_obj: Uploaded session file
-        
-#     Returns:
-#         Dictionary with session data formatted for display
-#     """
-#     global CURRENT_SESSION
-    
-#     if not file_obj:
-#         return {"error": "No file selected"}, None, None, None
-    
-#     try:
-#         # Read the file content
-#         import json
-#         content = file_obj.read()
-#         if isinstance(content, bytes):
-#             content = content.decode('utf-8')
-        
-#         # Parse the JSON content
-#         session_data = json.loads(content)
-        
-#         # Store in global session
-#         CURRENT_SESSION = session_data
-        
-#         # Prepare results for the three outputs (summary, table, full JSON)
-#         if "results" in session_data:
-#             results = session_data["results"]
-            
-#             # Data for the results summary
-#             summary = {
-#                 "message": results.get("message", ""),
-#                 "num_matches": results.get("num_matches", 0),
-#                 "summary": {
-#                     "total_results": results.get("num_matches", 0),
-#                     "note": f"Found {results.get('num_matches', 0)} total matches. All results are displayed and can be sorted by clicking on column headers."
-#                 },
-#                 "all_results": results.get("all_results", "")
-#             }
-            
-#             # Data for the results table - ALL matches, formatted as list of lists
-#             matches = results.get("matches", []) if "matches" in results else []
-#             table_data = []
-#             for match in matches:
-#                 row = [
-#                     match.get("query_idx", ""),
-#                     match.get("lookup_seq", ""),
-#                     match.get("D_score", ""),
-#                     match.get("lookup_entry", ""),
-#                     match.get("lookup_pfam", ""),
-#                     match.get("lookup_protein_names", "")
-#                 ]
-#                 table_data.append(row)
-            
-#             # Return all three components
-#             return {
-#                 "success": True,
-#                 "message": "Session loaded successfully"
-#             }, summary, table_data, results
-#         else:
-#             return {"error": "Invalid session format"}, None, None, None
-    
-#     except Exception as e:
-#         return {
-#             "error": f"Error loading session: {str(e)}"
-#         }, None, None, None
 
 def export_current_results(format_type: str) -> Dict[str, Any]:
     """
@@ -1168,10 +871,6 @@ def create_interface():
                         interactive=True  # Enable interactions like sorting
                     )
                     
-                    # Keep the original JSON output as an option for advanced users
-                    with gr.Accordion("Full JSON Output", open=False):
-                        output = gr.JSON(label="Raw Results")
-        
         # Export results
         with gr.Accordion("Export Results", open=False):
             with gr.Row():
@@ -1269,5 +968,4 @@ def create_interface():
 
 if __name__ == "__main__":
     interface = create_interface()
-    # Use share=False to avoid Windows antivirus issues
     interface.launch(share=False) 

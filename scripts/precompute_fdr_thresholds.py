@@ -12,20 +12,18 @@ import sys
 import os
 import tqdm
 
-# Add the parent directory to Python path to find protein_conformal module
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from protein_conformal.util import get_thresh_FDR, get_sims_labels, risk
 
 def main(args):
-    # Create DataFrame to store results with both exact and partial FDR
     fdr_thresholds = pd.DataFrame(columns=["alpha", "lambda_threshold", "exact_fdr", "partial_fdr"])
     
-    # Load calibration data
+    # Load calib data
     print(f"Loading calibration data from {args.cal_data}")
     data = np.load(args.cal_data, allow_pickle=True)
     
-    # Use a fixed number of calibration points
+    # Use a fixed number of calib points
     n_calib = args.n_calib
     print(f"Using {n_calib} calibration points")
     np.random.shuffle(data)
@@ -35,35 +33,25 @@ def main(args):
     X_cal_exact, y_cal_exact = get_sims_labels(cal_data, partial=False)
     X_cal_partial, y_cal_partial = get_sims_labels(cal_data, partial=True)
     
-    # Loop through alpha values from 0.01 to 0.2
     alpha_values = np.linspace(0.01, 0.2, args.n_alpha)
     
     print(f"Computing thresholds for {len(alpha_values)} alpha values between {alpha_values[0]} and {alpha_values[-1]}")
     for alpha in tqdm.tqdm(alpha_values, desc="Computing FDR thresholds"):
-        # Compute lambda threshold using get_thresh_FDR for exact matches
         lambda_threshold_exact, exact_fdr = get_thresh_FDR(
             y_cal_exact, X_cal_exact, alpha, args.delta, N=args.N
         )
-        
-        # Compute lambda threshold using get_thresh_FDR for partial matches  
         lambda_threshold_partial, partial_fdr = get_thresh_FDR(
             y_cal_partial, X_cal_partial, alpha, args.delta, N=args.N
-        )
-        
-        # Use the exact match threshold as the primary threshold
-        # Then compute what the actual FDR would be for partial matches using that threshold
-        actual_partial_fdr = risk(X_cal_partial, y_cal_partial, lambda_threshold_exact)
-        
-        # Add to DataFrame
+        )   
+
         new_row = pd.DataFrame({
             "alpha": [alpha],
             "lambda_threshold": [lambda_threshold_exact],  # Use exact match threshold
             "exact_fdr": [exact_fdr],
-            "partial_fdr": [actual_partial_fdr]  # FDR for partial matches using exact threshold
+            "partial_fdr": [partial_fdr]  # FDR for partial matches using exact threshold
         })
         fdr_thresholds = pd.concat([fdr_thresholds, new_row], ignore_index=True)
     
-    # Save results to CSV
     print(f"Saving FDR thresholds to {args.output}")
     fdr_thresholds.to_csv(args.output, index=False)
     
@@ -88,7 +76,7 @@ def parse_args():
     parser.add_argument(
         "--n_alpha",
         type=int,
-        default=20,
+        default=100,
         help="Number of alpha values to compute thresholds for (between 0.01 and 0.2, same use as n_bins from precompute_SVA_probs.py~)"
     )
     parser.add_argument(
@@ -105,13 +93,13 @@ def parse_args():
     parser.add_argument(
         "--n_calib",
         type=int,
-        default=100,
+        default=500,
         help="Number of calibration data points from the dataset to use, same use as n_calib in precompute_SVA_probs.py"
     )
     parser.add_argument(
         "--N",
         type=int,
-        default=20,
+        default=50,
         help="Number of search iterations for get_thresh_FDR"
     )
     
