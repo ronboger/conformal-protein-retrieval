@@ -2,6 +2,7 @@ import datetime
 import numpy as np
 import pandas as pd
 import argparse
+import os
 from tqdm import tqdm
 from protein_conformal.util import *
 
@@ -14,15 +15,28 @@ def main():
     parser.add_argument('--delta', type=float, default=0.5, help='Delta value for the algorithm')
     parser.add_argument('--output', type=str, default='/data/ron/protein-conformal/data/pfam_fdr.npy', help='Output file for the results')
     parser.add_argument('--add_date', type=bool, default=True, help='Add date to output file name')
+    parser.add_argument('--data_path', type=str, default=None, help='Path to the pfam data file')
     args = parser.parse_args()
     alpha = args.alpha
     num_trials = args.num_trials
     n_calib = args.n_calib
     delta = args.delta
     partial = args.partial
+    
+    # Determine data path - use relative path if not specified
+    if args.data_path is None:
+        # Get the directory where this script is located
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(script_dir)
+        data_path = os.path.join(project_root, 'data', 'conformal_pfam_with_lookup_dataset.npy')
+    else:
+        data_path = args.data_path
+    
+    print(f"Loading data from: {data_path}")
+    
     # Load the data
     # data = np.load('/data/ron/protein-conformal/data/conformal_pfam_with_lookup_dataset.npy', allow_pickle=True)
-    data = np.load('/data/ron/protein-conformal/data/pfam_new_proteins.npy', allow_pickle=True)
+    data = np.load(data_path, allow_pickle=True)
 
     risks = []
     tprs = []

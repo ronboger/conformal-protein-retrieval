@@ -1,98 +1,96 @@
 #!/bin/bash
 
-# default parameters
-CAL_DATA="${CAL_DATA:-./data/calibration/pfam_new_proteins.npy}"
-OUTPUT_DIR="${OUTPUT_DIR:-./results}"
-N_ALPHA="${N_ALPHA:-100}"
-DELTA="${DELTA:-0.5}"
-N_CALIB="${N_CALIB:-100}"
-N="${N:-50}"
-
-# Create output directory if it doesn't exist
-mkdir -p "$OUTPUT_DIR"
-
-echo "=== Precomputing FDR Thresholds ==="
-echo "Calibration data: $CAL_DATA"
-echo "Output directory: $OUTPUT_DIR"
-echo "Number of alpha values: $N_ALPHA"
-echo "Delta parameter: $DELTA"
-echo "Number of calibration points: $N_CALIB"
-echo "Number of search iterations: $N"
-echo
-
-# Precompute FDR thresholds for both exact and partial matches
-echo "Computing FDR thresholds for both exact and partial matches..."
-python -c "
-import numpy as np
-import pandas as pd
-import sys
-import os
-sys.path.append('.')
-
-# Import directly from the util module to avoid __init__.py dependencies
-import importlib.util
-spec = importlib.util.spec_from_file_location('util', './protein_conformal/util.py')
-util = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(util)
-
-get_thresh_FDR = util.get_thresh_FDR
-get_sims_labels = util.get_sims_labels
-risk = util.risk
-
-import tqdm
+# Get the directory where this script is located
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." &> /dev/null && pwd )"
 
 # Parameters
-cal_data_path = '$CAL_DATA'
-output_path = '$OUTPUT_DIR/fdr_thresholds.csv'
-n_alpha = $N_ALPHA
-delta = $DELTA
-n_calib = $N_CALIB
-N = $N
+MIN_ALPHA=0.01
+MAX_ALPHA=1.0
+NUM_ALPHA_VALUES=100
+NUM_TRIALS=100
+N_CALIB=1000
+DELTA=0.5
+OUTPUT_DIR="$PROJECT_ROOT/results"
+TEMP_DIR="$SCRIPT_DIR/temp_fdr_results"
+CSV_OUTPUT="$OUTPUT_DIR/fdr_thresholds.csv"
 
-print(f'Loading calibration data from {cal_data_path}')
-data = np.load(cal_data_path, allow_pickle=True)
+echo "Script directory: $SCRIPT_DIR"
+echo "Project root: $PROJECT_ROOT"
+echo "Output directory: $OUTPUT_DIR"
 
-print(f'Using {n_calib} calibration points')
-np.random.shuffle(data)
-cal_data = data[:n_calib]
 
-# Get calib features and labels for both exact and partial matches
-X_cal_exact, y_cal_exact = get_sims_labels(cal_data, partial=False)
-X_cal_partial, y_cal_partial = get_sims_labels(cal_data, partial=True)
+mkdir -p "$OUTPUT_DIR"
+mkdir -p "$TEMP_DIR"
 
-# Create df to store results with exact and partial FDR
-fdr_thresholds = pd.DataFrame(columns=['alpha', 'lambda_threshold', 'exact_fdr', 'partial_fdr'])
+# Initialize CSV file with header
+echo "alpha,lambda_threshold,exact_fdr,partial_fdr" > "$CSV_OUTPUT"
 
-# Loop through alpha values from 0.01 to 0.2
-alpha_values = np.linspace(0.01, 0.2, n_alpha)
+# Generate alpha values using Python
+ALPHA_VALUES=$(python -c "
+import numpy as np
+alphas = np.linspace($MIN_ALPHA, $MAX_ALPHA, $NUM_ALPHA_VALUES)
+print(' '.join([str(a) for a in alphas]))
+")
 
-print(f'Computing thresholds for {len(alpha_values)} alpha values between {alpha_values[0]:.3f} and {alpha_values[-1]:.3f}')
-for alpha in tqdm.tqdm(alpha_values, desc='Computing FDR thresholds'):
-    # Compute lambda threshold and FDR for exact matches
-    lambda_threshold_exact, exact_fdr = get_thresh_FDR(
-        y_cal_exact, X_cal_exact, alpha, delta, N=N
-    )
+# Counter for progress tracking
+counter=0
+total=$NUM_ALPHA_VALUES
+
+# Loop over alpha values
+for alpha in $ALPHA_VALUES; do
+    counter=$((counter + 1))
     
-    # Compute lambda threshold and FDR for partial matches
-    lambda_threshold_partial, partial_fdr = get_thresh_FDR(
-        y_cal_partial, X_cal_partial, alpha, delta, N=N
-    )
+    # Run FDR generation for exact matches
+    python "$PROJECT_ROOT/pfam/generate_fdr.py" \
+        --alpha "$alpha" \
+        --partial false \
+        --num_trials "$NUM_TRIALS" \
+        --n_calib "$N_CALIB" \
+        --delta "$DELTA" \
+        --output "$TEMP_DIR/fdr_exact_$alpha" \
+        --add_date false
     
-    # Add to DataFrame (using exact match threshold as the main threshold)
-    new_row = pd.DataFrame({
-        'alpha': [alpha],
-        'lambda_threshold': [lambda_threshold_exact],  
-        'exact_fdr': [exact_fdr],
-        'partial_fdr': [partial_fdr] 
-    })
-    fdr_thresholds = pd.concat([fdr_thresholds, new_row], ignore_index=True)
+    # Run FDR generation for partial matches
+    echo "  Running partial matches..."
+    python "$PROJECT_ROOT/pfam/generate_fdr.py" \
+        --alpha "$alpha" \
+        --partial true \
+        --num_trials "$NUM_TRIALS" \
+        --n_calib "$N_CALIB" \
+        --delta "$DELTA" \
+        --output "$TEMP_DIR/fdr_partial_$alpha" \
+        --add_date false
+    
+    # Extract results and append to CSV using Python
+    python -c "
+import numpy as np
+import sys
 
-# Save results to CSV
-print(f'Saving FDR thresholds to {output_path}')
-fdr_thresholds.to_csv(output_path, index=False)
-
-print('Example of results:')
-print(fdr_thresholds.head())
+try:
+    # Load exact match results
+    exact_data = np.load('$TEMP_DIR/fdr_exact_$alpha.npy', allow_pickle=True).item()
+    exact_lhat = np.mean(exact_data['lhats'])
+    exact_fdr = np.mean(exact_data['risks'])
+    
+    # Load partial match results
+    partial_data = np.load('$TEMP_DIR/fdr_partial_$alpha.npy', allow_pickle=True).item()
+    partial_fdr = np.mean(partial_data['risks'])
+    
+    # Write to CSV
+    with open('$CSV_OUTPUT', 'a') as f:
+        f.write(f'$alpha,{exact_lhat},{exact_fdr},{partial_fdr}\n')
+    
+    print(f'  Results: lambda={exact_lhat:.6f}, exact_fdr={exact_fdr:.6f}, partial_fdr={partial_fdr:.6f}')
+    
+except Exception as e:
+    print(f'Error processing alpha=$alpha: {e}', file=sys.stderr)
+    sys.exit(1)
 "
+done
 
-echo "FDR thresholds computation completed successfully!" 
+# Clean up temporary files
+rm -rf "$TEMP_DIR"
+echo "Results saved to: $CSV_OUTPUT"
+echo "Total alpha values processed: $total"
+
