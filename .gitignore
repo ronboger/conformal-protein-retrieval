@@ -21,9 +21,16 @@ data/inputs/
 data/lookup_embeddings_meta_data.tsv
 exported_reports/
 inter_results/
+results/
 saved_sessions/
 protein_vec_models/
+scripts/debug_data.py
 ignore/
+notes.md
+.gradio/
+Compute
+Machine
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
