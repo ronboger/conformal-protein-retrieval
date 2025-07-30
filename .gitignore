@@ -28,9 +28,9 @@ scripts/debug_data.py
 ignore/
 notes.md
 .gradio/
-Compute
-Machine
-
+scope/
+protein/
+protein_conformal/.gradio/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
