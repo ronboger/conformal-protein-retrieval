@@ -13,53 +13,6 @@ OUTPUT_DIR="../results"
 TEMP_DIR="./temp_fnr_results"
 CSV_OUTPUT="$OUTPUT_DIR/fnr_thresholds.csv"
 
-# Parse command line arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --min-alpha)
-            MIN_ALPHA="$2"
-            shift 2
-            ;;
-        --max-alpha)
-            MAX_ALPHA="$2"
-            shift 2
-            ;;
-        --num-values)
-            NUM_ALPHA_VALUES="$2"
-            shift 2
-            ;;
-        --num-trials)
-            NUM_TRIALS="$2"
-            shift 2
-            ;;
-        --n-calib)
-            N_CALIB="$2"
-            shift 2
-            ;;
-        --output)
-            CSV_OUTPUT="$2"
-            shift 2
-            ;;
-        -h|--help)
-            echo "Usage: $0 [OPTIONS]"
-            echo "Options:"
-            echo "  --min-alpha FLOAT      Minimum alpha value (default: $MIN_ALPHA)"
-            echo "  --max-alpha FLOAT      Maximum alpha value (default: $MAX_ALPHA)"
-            echo "  --num-values INT       Number of alpha values to test (default: $NUM_ALPHA_VALUES)"
-            echo "  --num-trials INT       Number of trials per alpha (default: $NUM_TRIALS)"
-            echo "  --n-calib INT          Calibration set size (default: $N_CALIB)"
-            echo "  --output PATH          Output CSV file (default: $CSV_OUTPUT)"
-            echo "  -h, --help             Show this help message"
-            exit 0
-            ;;
-        *)
-            echo "Unknown option: $1"
-            exit 1
-            ;;
-    esac
-done
-
-# Create necessary directories
 mkdir -p "$OUTPUT_DIR"
 mkdir -p "$TEMP_DIR"
 
@@ -75,7 +28,7 @@ echo "Output file: $CSV_OUTPUT"
 echo ""
 
 # Generate alpha values using Python
-ALPHA_VALUES=$(python3 -c "
+ALPHA_VALUES=$(python -c "
 import numpy as np
 alphas = np.linspace($MIN_ALPHA, $MAX_ALPHA, $NUM_ALPHA_VALUES)
 print(' '.join([str(a) for a in alphas]))
@@ -92,7 +45,7 @@ for alpha in $ALPHA_VALUES; do
     
     # Run FNR generation for exact matches
     echo "  Running exact matches..."
-    python3 ../pfam/generate_fnr.py \
+    python ../pfam/generate_fnr.py \
         --alpha "$alpha" \
         --partial false \
         --num_trials "$NUM_TRIALS" \
@@ -102,7 +55,7 @@ for alpha in $ALPHA_VALUES; do
     
     # Run FNR generation for partial matches
     echo "  Running partial matches..."
-    python3 ../pfam/generate_fnr.py \
+    python ../pfam/generate_fnr.py \
         --alpha "$alpha" \
         --partial true \
         --num_trials "$NUM_TRIALS" \
@@ -111,7 +64,7 @@ for alpha in $ALPHA_VALUES; do
         --add_date false
     
     # Extract results and append to CSV using Python
-    python3 -c "
+    python -c "
 import numpy as np
 import sys
 
