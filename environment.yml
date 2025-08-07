@@ -16,7 +16,7 @@ dependencies:
   - scikit-learn>=1.0.0
 
   # Machine Learning & Deep Learning
-  - pytorch>=2.0.0
+  - pytorch>=2.1.0
   - cpuonly  # CPU-only PyTorch for Windows compatibility
   - transformers>=4.30.0
 
@@ -26,8 +26,7 @@ dependencies:
   # Bioinformatics
   - biopython>=1.81
 
-  # Web frameworks and APIs
-  - gradio>=3.50.0
+  # Web frameworks and APIs  
   - fastapi>=0.90.0
   - uvicorn>=0.18.0
   - jinja2>=3.1.0
@@ -53,6 +52,7 @@ dependencies:
   # Pip dependencies (packages not available via conda)
   - pip
   - pip:
+    - gradio>=4.0.0  # Install from PyPI with prebuilt frontend assets
     - py3Dmol>=1.8.0  # 3D molecular visualization for Gradio
 
 # Installation instructions:
