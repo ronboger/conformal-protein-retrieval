@@ -31,6 +31,7 @@ RUN conda tos accept \
 
 # Create the env and clean up
 RUN conda env create -f environment.yml && \
+    conda run -n protein-conformal pip install --force-reinstall gradio>=4.0.0 && \
     conda clean -afy
 
 # 7. Copy the rest of your code
@@ -39,8 +40,9 @@ COPY . /workspace/
 # 8. Activate env by default
 SHELL ["conda", "run", "-n", "protein-conformal", "/bin/bash", "-c"]
 
-# 9. Expose Gradio port
+# # 9. Expose Gradio port
 EXPOSE 7860
 
-# 10. Default command: start your Gradio app
-CMD ["python", "-m", "protein_conformal.gradio_app"]
+# # 10. Default command: start your Gradio app 
+# SHELL ["conda", "run", "-n", "protein-conformal", "/bin/bash", "-c"]
+# # CMD python -m protein_conformal.gradio_app --share --host 0.0.0.0
