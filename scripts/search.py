@@ -1,3 +1,11 @@
+'''
+# default parameters
+python scripts/search.py --query_embedding data/inputs/queries_embeddings.npy --query_fasta data/inputs/rcsb_pdb_4CS4.fasta --lookup_embedding data/lookup/scope_lookup_embeddings.npy --lookup_fasta data/lookup/scope_lookup.fasta --fdr --output results/search_results.csv --k 100
+# lower lambda
+python scripts/search.py --query_embedding data/inputs/queries_embeddings.npy --query_fasta data/inputs/rcsb_pdb_4CS4.fasta --lookup_embedding data/lookup/scope_lookup_embeddings.npy --lookup_fasta data/lookup/scope_lookup.fasta --fdr --fdr_lambda 0.5 --output results/search_results.csv --k 100 --save_inter
+
+
+'''
 import numpy as np
 import pandas as pd
 import argparse
@@ -61,6 +69,11 @@ def main(args):
             # lhat, fdr_cal = get_thresh_FDR(
             #     y_cal, X_cal, args.alpha, args.delta, N=100
             # )
+            # get threshold from lambda.py, already exists but slow. a bit slow
+            # given new alpha, calculate lambda, and run example at diff values of alpha
+            # then get precomputed lambda, when code is run then dont need to calcualtion each time
+            # make a table of precomputed lambdas similar to calibrated probs, isnt there yet, we'll work on that
+            # find where lambda is calcuated against alpha in the conformal risk control 
             lhat = 0.1
         results = results[results["D_score"] >= lhat] # cosine similarity
     elif args.fnr:

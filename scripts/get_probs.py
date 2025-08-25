@@ -25,9 +25,19 @@ def main(args):
         prob_exact_lst, prob_partial_lst = [], []
 
         for d in df["D_score"]:
-            # Find lower bin, upper bin in df
-            lower_bin = df_probs[df_probs["similarity"] <= d].iloc[-1]
-            upper_bin = df_probs[df_probs["similarity"] >= d].iloc[0]
+            # Check if there are any rows where similarity <= d
+            if len(df_probs[df_probs["similarity"] <= d]) > 0:
+                lower_bin = df_probs[df_probs["similarity"] <= d].iloc[-1]
+            else:
+                # If d is smaller than all similarities, use the smallest bin
+                lower_bin = df_probs.iloc[0]
+                
+            # Check if there are any rows where similarity >= d
+            if len(df_probs[df_probs["similarity"] >= d]) > 0:
+                upper_bin = df_probs[df_probs["similarity"] >= d].iloc[0]
+            else:
+                # If d is larger than all similarities, use the largest bin
+                upper_bin = df_probs.iloc[-1]
 
             # Get probabilities for lower bin, upper bin (columns "prob_exact_p0", "prob_exact_p1")
             p_0_lower = lower_bin["prob_exact_p0"]
@@ -61,7 +71,7 @@ def main(args):
 
         # Load calibration data
         data = np.load(
-            "/groups/doudna/projects/ronb/conformal_backup/protein-conformal/data/pfam_new_proteins.npy",
+            args.cal_data,
             allow_pickle=True,
         )
         print("loading calibration data")
@@ -86,7 +96,7 @@ def main(args):
         if args.partial:
             # TODO: this stage may not be necessary, but we noticed sometimes that shuffling the data would mess up the original file
             data = np.load(
-                "/groups/doudna/projects/ronb/conformal_backup/protein-conformal/data/pfam_new_proteins.npy",
+                args.cal_data,
                 allow_pickle=True,
             )
             print("loading calibration data")
@@ -153,6 +163,9 @@ def parse_args():
     # )
     parser.add_argument(
         "--n_calib", type=int, default=100, help="Number of calibration data points"
+    )
+    parser.add_argument(
+        "--cal_data", type=str, default="/groups/doudna/projects/ronb/conformal_backup/protein-conformal/data/pfam_new_proteins.npy", help="Path to calibration data"
     )
     return parser.parse_args()
 

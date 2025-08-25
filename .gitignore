@@ -15,7 +15,22 @@ data/dali_multidomain_results_csv/
 data/dali_multidomain_results_csv_small/
 figs/
 data/gene_unknown/
-
+data/lookup/
+data/calibration/
+data/inputs/
+data/lookup_embeddings_meta_data.tsv
+exported_reports/
+inter_results/
+results/
+saved_sessions/
+protein_vec_models/
+scripts/debug_data.py
+ignore/
+notes.md
+.gradio/
+scope/
+protein/
+protein_conformal/.gradio/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
