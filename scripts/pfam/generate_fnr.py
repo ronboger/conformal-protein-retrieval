@@ -59,11 +59,11 @@ def main():
 
     output_file = args.output + ('_' + str(datetime.datetime.now().date()) if args.add_date else '' + '.npy')
 
-    np.save(output_file, 
-            {'fnrs': fnrs,
-             'tprs': tprs, 
-             'lhats': lhats,
-             'fprs': fprs})
+    np.savez(output_file, 
+             fnrs=fnrs,
+             tprs=tprs, 
+             lhats=lhats,
+             fprs=fprs)
 
 if __name__ == "__main__":
     main()
