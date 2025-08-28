@@ -194,3 +194,4 @@ cython_debug/
 #.idea/
 _large_artifacts/
 data/protein_vec_models.gz
+_large_artifacts/
