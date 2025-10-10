@@ -10,7 +10,7 @@ dependencies:
   - python=3.10
 
   # Core scientific computing
-  - numpy>=1.24.0
+  - numpy=1.26.*
   - pandas>=2.0.0
   - scipy>=1.10.0
   - scikit-learn>=1.0.0
@@ -19,6 +19,8 @@ dependencies:
   - pytorch>=2.1.0
   - cpuonly  # CPU-only PyTorch for Windows compatibility
   - transformers>=4.30.0
+  - pytorch-lightning>=2.0.0 
+  - h5py>=3.7.0
 
   # FAISS for similarity search
   - faiss-cpu>=1.7.4  # Use faiss-gpu if you have GPU support
@@ -52,8 +54,11 @@ dependencies:
   # Pip dependencies (packages not available via conda)
   - pip
   - pip:
+    - numpy<2.0
     - gradio>=4.0.0  # Install from PyPI with prebuilt frontend assets
     - py3Dmol>=1.8.0  # 3D molecular visualization for Gradio
+    - sentencepiece>=0.1.99
+    - tensorboard
 
 # Installation instructions:
 # conda env update -f environment.yaml --prune  # Update existing 'cpr' environment

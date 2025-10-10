@@ -9,11 +9,11 @@ from protein_conformal.util import *
 def main():
     parser = argparse.ArgumentParser(description='Generate FNR thresholds for different alpha values')
     parser.add_argument('--alpha', type=float, default=0.1, help='Alpha value for the algorithm')
-    parser.add_argument('--partial', type=bool, default=False, help='Partial hits')
+    parser.add_argument('--partial', action='store_true', help='Partial hits')
     parser.add_argument('--num_trials', type=int, default=100, help='Number of trials to run')
     parser.add_argument('--n_calib', type=int, default=1000, help='Number of calibration data points')
     parser.add_argument('--output', type=str, default='/data/ron/protein-conformal/data/pfam_fnr.npy', help='Output file for the results')
-    parser.add_argument('--add_date', type=bool, default=True, help='Add date to output file name')
+    parser.add_argument('--add_date', action='store_true', help='Add date to output file name')
     parser.add_argument('--data_path', type=str, default=None, help='Path to the pfam data file')
     args = parser.parse_args()
     alpha = args.alpha
@@ -26,7 +26,7 @@ def main():
         # Get the directory where this script is located
         script_dir = os.path.dirname(os.path.abspath(__file__))
         project_root = os.path.dirname(script_dir)
-        data_path = os.path.join(project_root, 'data', 'conformal_pfam_with_lookup_dataset.npy')
+        data_path = os.path.join(project_root, 'data', 'pfam_new_proteins.npy')
     else:
         data_path = args.data_path
     
@@ -61,7 +61,7 @@ def main():
     print("Lhat: ", np.mean(lhats))
     print("FPR: ", np.mean(fprs))
 
-    output_file = args.output + ('_' + str(datetime.datetime.now().date()) if args.add_date else '' + '.npy')
+    output_file = args.output + ('_' + str(datetime.datetime.now().date()) if args.add_date else '') + '.npy'
 
     np.save(output_file, 
             {'fnrs': fnrs,

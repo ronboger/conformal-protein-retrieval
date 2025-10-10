@@ -1,5 +1,5 @@
 # Core dependencies
-numpy>=1.24.0
+numpy>=1.24.0,<2.0.0
 torch>=2.0.0
 gradio>=3.50.0
 biopython>=1.81

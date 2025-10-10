@@ -3,29 +3,30 @@
 # Script to precompute FNR thresholds for different alpha values
 # Usage: ./precompute_fnr_thresholds.sh [OPTIONS]
 
+# Get the directory where this script is located
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." &> /dev/null && pwd )"
+
 # Default parameters - can be modified as needed
 MIN_ALPHA=0.01
-MAX_ALPHA=1.0
+MAX_ALPHA=0.2
 NUM_ALPHA_VALUES=100
 NUM_TRIALS=100
-N_CALIB=1000
-OUTPUT_DIR="../results"
-TEMP_DIR="./temp_fnr_results"
+N_CALIB=100
+OUTPUT_DIR="$PROJECT_ROOT/results"
+TEMP_DIR="$SCRIPT_DIR/temp_fnr_results"
 CSV_OUTPUT="$OUTPUT_DIR/fnr_thresholds.csv"
+
+echo "Script directory: $SCRIPT_DIR"
+echo "Project root: $PROJECT_ROOT"
+echo "Output directory: $OUTPUT_DIR"
+echo ""
 
 mkdir -p "$OUTPUT_DIR"
 mkdir -p "$TEMP_DIR"
 
 # Initialize CSV file with header
 echo "alpha,lambda_threshold,exact_fnr,partial_fnr" > "$CSV_OUTPUT"
-
-echo "Precomputing FNR thresholds..."
-echo "Alpha range: $MIN_ALPHA to $MAX_ALPHA"
-echo "Number of alpha values: $NUM_ALPHA_VALUES"
-echo "Trials per alpha: $NUM_TRIALS"
-echo "Calibration set size: $N_CALIB"
-echo "Output file: $CSV_OUTPUT"
-echo ""
 
 # Generate alpha values using Python
 ALPHA_VALUES=$(python -c "
@@ -41,45 +42,52 @@ total=$NUM_ALPHA_VALUES
 # Loop over alpha values
 for alpha in $ALPHA_VALUES; do
     counter=$((counter + 1))
-    echo "Processing alpha=$alpha ($counter/$total)..."
     
     # Run FNR generation for exact matches
-    echo "  Running exact matches..."
-    python ../pfam/generate_fnr.py \
+    python "$PROJECT_ROOT/pfam/generate_fnr.py" \
         --alpha "$alpha" \
-        --partial false \
         --num_trials "$NUM_TRIALS" \
         --n_calib "$N_CALIB" \
-        --output "$TEMP_DIR/fnr_exact_$alpha" \
-        --add_date false
+        --output "$TEMP_DIR/fnr_exact_$alpha"
     
     # Run FNR generation for partial matches
     echo "  Running partial matches..."
-    python ../pfam/generate_fnr.py \
+    python "$PROJECT_ROOT/pfam/generate_fnr.py" \
         --alpha "$alpha" \
-        --partial true \
+        --partial \
         --num_trials "$NUM_TRIALS" \
         --n_calib "$N_CALIB" \
-        --output "$TEMP_DIR/fnr_partial_$alpha" \
-        --add_date false
+        --output "$TEMP_DIR/fnr_partial_$alpha"
     
     # Extract results and append to CSV using Python
     python -c "
 import numpy as np
 import sys
+import os
+
+# Convert MINGW64 paths to Windows format
+def mingw_to_windows_path(path):
+    if path.startswith('/c/'):
+        return 'C:/' + path[3:]
+    return path
 
 try:
+    temp_dir = mingw_to_windows_path('$TEMP_DIR')
+    csv_output = mingw_to_windows_path('$CSV_OUTPUT')
+    
     # Load exact match results
-    exact_data = np.load('$TEMP_DIR/fnr_exact_$alpha.npy', allow_pickle=True).item()
+    exact_file = os.path.join(temp_dir, 'fnr_exact_$alpha.npy')
+    exact_data = np.load(exact_file, allow_pickle=True).item()
     exact_lhat = np.mean(exact_data['lhats'])
     exact_fnr = np.mean(exact_data['fnrs'])
     
     # Load partial match results  
-    partial_data = np.load('$TEMP_DIR/fnr_partial_$alpha.npy', allow_pickle=True).item()
+    partial_file = os.path.join(temp_dir, 'fnr_partial_$alpha.npy')
+    partial_data = np.load(partial_file, allow_pickle=True).item()
     partial_fnr = np.mean(partial_data['fnrs'])
     
     # Write to CSV
-    with open('$CSV_OUTPUT', 'a') as f:
+    with open(csv_output, 'a') as f:
         f.write(f'$alpha,{exact_lhat},{exact_fnr},{partial_fnr}\n')
     
     print(f'  Results: lambda={exact_lhat:.6f}, exact_fnr={exact_fnr:.6f}, partial_fnr={partial_fnr:.6f}')
@@ -88,19 +96,10 @@ except Exception as e:
     print(f'Error processing alpha=$alpha: {e}', file=sys.stderr)
     sys.exit(1)
 "
-    
-    if [ $? -ne 0 ]; then
-        echo "Error processing alpha=$alpha" >&2
-        exit 1
-    fi
 done
 
 # Clean up temporary files
-echo ""
-echo "Cleaning up temporary files..."
 rm -rf "$TEMP_DIR"
-
-echo "FNR threshold precomputation completed!"
 echo "Results saved to: $CSV_OUTPUT"
 echo "Total alpha values processed: $total"
 

@@ -31,7 +31,6 @@ RUN conda tos accept \
 
 # Create the env and clean up
 RUN conda env create -f environment.yml && \
-    conda run -n protein-conformal pip install --force-reinstall gradio>=4.0.0 && \
     conda clean -afy
 
 # 7. Copy the rest of your code
