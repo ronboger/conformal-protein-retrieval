@@ -1,0 +1,75 @@
+name: protein-conformal
+channels:
+  - pytorch
+  - conda-forge
+  - huggingface
+  - defaults
+
+dependencies:
+  # Python version
+  - python=3.10
+
+  # Core scientific computing
+  - numpy=1.26.*
+  - pandas>=2.0.0
+  - scipy>=1.10.0
+  - scikit-learn>=1.0.0
+
+  # Machine Learning & Deep Learning
+  - pytorch>=2.1.0
+  - cpuonly  # CPU-only PyTorch for Windows compatibility
+  - transformers>=4.30.0
+  - pytorch-lightning>=2.0.0 
+  - h5py>=3.7.0
+
+  # FAISS for similarity search
+  - faiss-cpu>=1.7.4  # Use faiss-gpu if you have GPU support
+
+  # Bioinformatics
+  - biopython>=1.81
+
+  # Web frameworks and APIs  
+  - fastapi>=0.90.0
+  - uvicorn>=0.18.0
+  - jinja2>=3.1.0
+  - pydantic>=1.10.0
+  - python-multipart>=0.0.5
+
+  # Visualization and plotting
+  - matplotlib>=3.5.0
+  - seaborn>=0.12.0
+  - plotly>=5.9.0
+  - networkx>=2.8.0
+
+  # Development and debugging tools
+  - tqdm
+  - ipdb
+  - jupyter
+  - notebook
+  - jupyterlab
+
+  # Utilities
+  - requests>=2.27.1
+
+  # Pip dependencies (packages not available via conda)
+  - pip
+  - pip:
+    - numpy<2.0
+    - gradio>=4.0.0  # Install from PyPI with prebuilt frontend assets
+    - py3Dmol>=1.8.0  # 3D molecular visualization for Gradio
+    - sentencepiece>=0.1.99
+    - tensorboard
+    - huggingface_hub>=0.22.0
+
+# Installation instructions:
+# conda env update -f environment.yaml --prune  # Update existing 'cpr' environment
+# conda activate cpr
+# 
+# Alternative: Create new environment
+# conda env create -f environment.yaml
+# conda activate protein-conformal
+#
+# For GPU support on Linux/properly configured CUDA systems:
+# 1. Replace 'cpuonly' with 'pytorch-cuda=11.8' 
+# 2. Change 'faiss-cpu' to 'faiss-gpu'
+# 3. Add nvidia channel: conda install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia

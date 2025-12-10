@@ -1,0 +1,71 @@
+# Large data files and directories - DO NOT include in Docker build
+cpr_data/
+data/
+saved_sessions/
+protein_vec_models/
+exported_reports/
+inter_results/
+temp_fnr_results/
+scope/
+protein/
+
+# Specific large file patterns
+*.npy
+*.pkl
+*.ckpt
+*.h5
+*.pth
+*.pt
+*.safetensors
+
+# Git and version control
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# Development files
+*.ipynb
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg-info/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Temporary directories
+scratch/
+ignore/
+clean_selection/
+ec/*.tsv
+afdb/
+pfam/*.ipynb
+
+# Environment
+.env
+.venv
+venv/
+ENV/
+
+# Documentation and notes
+notes.md
+README.md
+LICENSE
