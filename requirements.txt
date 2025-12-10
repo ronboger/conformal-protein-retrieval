@@ -8,6 +8,7 @@ requests>=2.27.1
 pandas>=2.0.0
 scipy>=1.10.0
 faiss-cpu>=1.7.4  # or faiss-gpu if using GPU
+huggingface_hub>=0.34.0,<1.0  # transformers requires <1.0 in this app
 
 # Visualization dependencies
 py3Dmol>=1.8.0

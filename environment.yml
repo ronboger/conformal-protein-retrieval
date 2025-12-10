@@ -59,7 +59,7 @@ dependencies:
     - py3Dmol>=1.8.0  # 3D molecular visualization for Gradio
     - sentencepiece>=0.1.99
     - tensorboard
-    - huggingface_hub>=0.22.0
+    - huggingface_hub>=0.34.0,<1.0
 
 # Installation instructions:
 # conda env update -f environment.yaml --prune  # Update existing 'cpr' environment
