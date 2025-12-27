@@ -33,6 +33,10 @@ RUN conda tos accept \
 RUN conda env create -f environment.yml && \
     conda clean -afy
 
+# Ensure pip pins override conda-resolved versions (HF Spaces build has shown hub>=1.0)
+RUN conda run -n protein-conformal pip install --no-cache-dir --force-reinstall \
+    "huggingface_hub>=0.34.0,<1.0" "transformers>=4.30.0"
+
 # 7. Copy the rest of your code
 COPY . /workspace/
 
