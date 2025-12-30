@@ -818,7 +818,36 @@ def _process_input_impl(stage_timer: StageTimer,
             }
         
         progress(1.0, desc="Conformal prediction complete!")
-        return summary, results_df
+        display_header_map = {
+            "query_seq": "Query Sequence",
+            "query_meta": "Query Description",
+            "lookup_seq": "Match Sequence",
+            "lookup_meta": "Match Description",
+            "lookup_entry": "UniProt Entry",
+            "lookup_pfam": "Pfam",
+            "lookup_protein_names": "Protein Name(s)",
+            "D_score": "Similarity (D score)",
+            "prob_exact": "Match Probability",
+            "p0": "Prob (p0)",
+            "p1": "Prob (p1)",
+        }
+        preferred_order = [
+            "query_meta",
+            "query_seq",
+            "lookup_entry",
+            "lookup_pfam",
+            "lookup_protein_names",
+            "lookup_meta",
+            "lookup_seq",
+            "D_score",
+            "prob_exact",
+            "p0",
+            "p1",
+        ]
+        display_columns = [col for col in preferred_order if col in results_df.columns]
+        display_columns.extend([col for col in results_df.columns if col not in display_columns])
+        display_df = results_df.reindex(columns=display_columns).rename(columns=display_header_map)
+        return summary, display_df
     except Exception as e:
         error_message = {"error": f"Error during search: {str(e)}"}
         return error_message, pd.DataFrame()
