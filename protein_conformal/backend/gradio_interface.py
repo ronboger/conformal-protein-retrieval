@@ -1080,23 +1080,21 @@ def create_interface():
                 submit_btn = gr.Button("Search", variant="primary")
         
         # Results section
+        gr.Markdown("## 3. Results")
         with gr.Row():
-            gr.Markdown("## 3. Results")
-        
-            with gr.Row():
-                with gr.Column():
-                    # Conformal prediction summary
-                    results_summary = gr.JSON(label="Conformal Prediction Results")
-                        
-                    # Add a DataFrame for displaying results in a tabular format
-                    # Note: Headers will be determined by the DataFrame columns
-                    # For FASTA lookup: query_seq, query_meta, lookup_seq, D_score, prob_exact, lookup_meta
-                    # For TSV lookup: query_seq, query_meta, lookup_seq, D_score, prob_exact, lookup_entry, lookup_pfam, lookup_protein_names
-                    results_table = gr.Dataframe(
-                        label="Results Table (All Matches - Click Column Headers to Sort)",
-                        wrap=True,
-                        interactive=True  # Enable interactions like sorting
-                    )
+            with gr.Column():
+                # Conformal prediction summary
+                results_summary = gr.JSON(label="Conformal Prediction Results")
+                    
+                # Add a DataFrame for displaying results in a tabular format
+                # Note: Headers will be determined by the DataFrame columns
+                # For FASTA lookup: query_seq, query_meta, lookup_seq, D_score, prob_exact, lookup_meta
+                # For TSV lookup: query_seq, query_meta, lookup_seq, D_score, prob_exact, lookup_entry, lookup_pfam, lookup_protein_names
+                results_table = gr.Dataframe(
+                    label="Results Table (All Matches - Click Column Headers to Sort)",
+                    wrap=True,
+                    interactive=True  # Enable interactions like sorting
+                )
                     
         # Export results
         with gr.Accordion("Export Results", open=False):
