@@ -852,7 +852,7 @@ def _process_input_impl(stage_timer: StageTimer,
         error_message = {"error": f"Error during search: {str(e)}"}
         return error_message, pd.DataFrame()
 
-def export_current_results(format_type: str) -> Dict[str, Any]:
+def export_current_results(format_type: str) -> Tuple[Dict[str, Any], Optional[str]]:
     """
     Export the current results in the specified format.
     All matches (not just displayed ones) will be included in the export.
@@ -861,12 +861,12 @@ def export_current_results(format_type: str) -> Dict[str, Any]:
         format_type: Format to export (csv, json)
         
     Returns:
-        Dictionary with file path and status
+        Tuple of (status dict, file path for download)
     """
     global CURRENT_SESSION
     
     if not CURRENT_SESSION or "results" not in CURRENT_SESSION:
-        return {"error": "No results to export"}
+        return {"error": "No results to export"}, None
     
     try:
         # Create a directory for exported reports if it doesn't exist
@@ -886,7 +886,7 @@ def export_current_results(format_type: str) -> Dict[str, Any]:
                 df.to_csv(file_path, index=False)
                 total_exported = len(df)
             else:
-                return {"error": "No matches to export"}
+                return {"error": "No matches to export"}, None
         elif format_type == "json":
             with open(file_path, 'w') as f:
                 import json
@@ -894,18 +894,18 @@ def export_current_results(format_type: str) -> Dict[str, Any]:
                 json.dump(CURRENT_SESSION["results"], f, indent=2)
                 total_exported = CURRENT_SESSION["results"]["num_matches"]
         else:
-            return {"error": f"Unsupported format: {format_type}"}
+            return {"error": f"Unsupported format: {format_type}"}, None
         
         return {
             "success": True,
             "message": f"Results exported as {file_path} ({total_exported} records)",
             "file_path": file_path
-        }
+        }, file_path
     
     except Exception as e:
         return {
             "error": f"Error exporting results: {str(e)}"
-        }
+        }, None
 
 def create_interface():
     """
@@ -1107,6 +1107,10 @@ def create_interface():
                     )
                     export_btn = gr.Button("Export Results")
                     export_status = gr.JSON(label="Export Status")
+                    export_download = gr.File(
+                        label="Download Results",
+                        interactive=False
+                    )
                     
                     gr.Markdown("""
                     ### Citation
@@ -1131,7 +1135,7 @@ def create_interface():
         export_btn.click(
             fn=export_current_results,
             inputs=[export_format],
-            outputs=[export_status]
+            outputs=[export_status, export_download]
         )
         
         # Main prediction submission - hardcode input_type as "fasta_format"
