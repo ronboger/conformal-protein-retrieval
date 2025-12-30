@@ -875,7 +875,15 @@ def export_current_results(format_type: str) -> Tuple[Dict[str, Any], Optional[s
         # Create a unique filename
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        file_path = os.path.join("exported_reports", f"results_{timestamp}.{format_type}")
+        risk_type = (CURRENT_SESSION.get("parameters", {}).get("risk_type") or "risk").lower()
+        threshold = CURRENT_SESSION.get("results", {}).get("threshold")
+        threshold_tag = "thr_unknown"
+        if isinstance(threshold, (int, float)):
+            threshold_tag = f"thr_{threshold:.4f}".replace(".", "p")
+        file_path = os.path.join(
+            "exported_reports",
+            f"results_{timestamp}_{risk_type}_{threshold_tag}.{format_type}",
+        )
         
         # Export the results
         if format_type == "csv":
