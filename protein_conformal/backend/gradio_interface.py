@@ -999,14 +999,8 @@ def create_interface():
                     file_types=[".fasta", ".fa", ".txt"]
                 )
                 
-                # Embedding options
-                with gr.Accordion("Advanced Embedding Options", open=False):
-                    use_protein_vec = gr.Checkbox(
-                        label="Use Protein-Vec for embeddings",
-                        value=True,
-                        info="If disabled, you must upload your own embeddings"
-                    )
-
+                # Keep Protein-Vec enabled without exposing a UI toggle.
+                use_protein_vec = gr.State(value=True)
                 custom_embeddings_state = gr.State(value=None)
             
             with gr.Column():
