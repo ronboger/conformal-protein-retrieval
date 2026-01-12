@@ -1,3 +1,5 @@
+# take min similarity and max similarity from the calibration data, compute linspace of probabalitty 
+
 import numpy as np
 import pandas as pd
 import argparse
@@ -28,14 +30,15 @@ def main(args):
     bins = np.linspace(min_sim, max_sim, args.n_bins)
     for d in tqdm.tqdm(bins, desc="Calculating probabilities"):
         p_0, p_1 = simplifed_venn_abers_prediction(X_cal, y_cal, d)
-        sim2prob = sim2prob.append(
-            {
-                "similarity": d,
-                "prob_exact_p0": p_0,
-                "prob_exact_p1": p_1,
-            },
-            ignore_index=True,
-        )
+        # Replace append with concat
+        new_row = pd.DataFrame({
+            "similarity": [d],
+            "prob_exact_p0": [p_0],
+            "prob_exact_p1": [p_1],
+            "prob_partial_p0": [np.nan],  # Will be filled later if partial=True
+            "prob_partial_p1": [np.nan]   # Will be filled later if partial=True
+        })
+        sim2prob = pd.concat([sim2prob, new_row], ignore_index=True)
 
     if args.partial:
         # TODO: this stage may not be necessary, but we noticed sometimes that shuffling the data would mess up the original file
