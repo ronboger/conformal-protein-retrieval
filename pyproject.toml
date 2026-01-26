@@ -1,0 +1,92 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cpr"
+version = "0.1.0"
+description = "Conformal Protein Retrieval - Functional protein mining with statistical guarantees"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Ron S. Boger"},
+    {name = "Seyone Chithrananda"},
+    {name = "Anastasios N. Angelopoulos"},
+    {name = "Peter H. Yoon"},
+    {name = "Michael I. Jordan"},
+    {name = "Jennifer A. Doudna"},
+]
+keywords = ["protein", "conformal prediction", "bioinformatics", "machine learning", "FDR control"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+    "scipy>=1.10.0",
+    "scikit-learn>=1.0.0",
+    "biopython>=1.81",
+    "faiss-cpu>=1.7.4",
+    "torch>=2.0.0",
+    "transformers>=4.30.0",
+]
+
+[project.optional-dependencies]
+gui = [
+    "gradio>=3.50.0",
+    "plotly>=5.9.0",
+    "py3Dmol>=1.8.0",
+    "networkx>=2.8.0",
+    "matplotlib>=3.5.0",
+    "seaborn>=0.12.0",
+]
+api = [
+    "fastapi>=0.90.0",
+    "uvicorn>=0.18.0",
+    "jinja2>=3.1.0",
+    "pydantic>=1.10.0",
+    "python-multipart>=0.0.5",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+all = ["cpr[gui,api,dev]"]
+
+[project.scripts]
+cpr = "protein_conformal.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/ronboger/conformal-protein-retrieval"
+Documentation = "https://github.com/ronboger/conformal-protein-retrieval#readme"
+Repository = "https://github.com/ronboger/conformal-protein-retrieval"
+Paper = "https://www.nature.com/articles/s41467-024-55676-y"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["protein_conformal*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+select = ["E", "F", "W", "I", "N"]
+ignore = ["E501"]
