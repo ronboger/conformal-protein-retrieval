@@ -1,0 +1,22 @@
+# Docker Compose for Conformal Protein Retrieval
+#
+# Usage:
+#   docker-compose up              # Start the GUI
+#   docker-compose up -d           # Start in background
+#   docker-compose down            # Stop
+
+version: '3.8'
+
+services:
+  cpr:
+    build: .
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./data:/workspace/data
+      - ./results:/workspace/results
+      - ./protein_vec_models:/workspace/protein_vec_models
+    environment:
+      - GRADIO_SERVER_NAME=0.0.0.0
+      - GRADIO_SERVER_PORT=7860
+    restart: unless-stopped
