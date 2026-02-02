@@ -46,10 +46,9 @@ def cmd_embed(args):
         embeddings = _embed_protein_vec(sequences, device, args)
     elif args.model == 'clean':
         embeddings = _embed_clean(sequences, device, args)
-    elif args.model == 'esm':
-        embeddings = _embed_esm(sequences, device, args)
     else:
         print(f"Unknown model: {args.model}")
+        print("Available models: protein-vec, clean")
         sys.exit(1)
 
     print(f"Embeddings shape: {embeddings.shape}")
@@ -157,50 +156,6 @@ def _embed_clean(sequences, device, args):
     return clean_embeddings
 
 
-def _embed_esm(sequences, device, args):
-    """Embed using ESM-1b or ESM2 model."""
-    import numpy as np
-    import torch
-
-    try:
-        import esm
-    except ImportError:
-        print("Error: ESM package not installed.")
-        print("Install with: pip install fair-esm")
-        sys.exit(1)
-
-    esm_version = getattr(args, 'esm_version', '1b')
-    print(f"Loading ESM-{esm_version} model...")
-
-    if esm_version == '2':
-        model, alphabet = esm.pretrained.esm2_t33_650M_UR50D()
-    else:
-        model, alphabet = esm.pretrained.esm1b_t33_650M_UR50S()
-
-    batch_converter = alphabet.get_batch_converter()
-    model = model.to(device).eval()
-
-    # Process in batches
-    batch_size = getattr(args, 'batch_size', 4)
-    embeddings = []
-
-    for i in range(0, len(sequences), batch_size):
-        batch_seqs = sequences[i:i+batch_size]
-        batch_data = [(f"seq_{j}", seq) for j, seq in enumerate(batch_seqs)]
-
-        _, _, batch_tokens = batch_converter(batch_data)
-        batch_tokens = batch_tokens.to(device)
-
-        with torch.no_grad():
-            results = model(batch_tokens, repr_layers=[33], return_contacts=False)
-            # Mean pooling over sequence length
-            batch_emb = results["representations"][33].mean(dim=1).cpu().numpy()
-            embeddings.append(batch_emb)
-
-        if (i + batch_size) % 20 == 0 or i + batch_size >= len(sequences):
-            print(f"  Processed {min(i + batch_size, len(sequences))}/{len(sequences)}")
-
-    return np.concatenate(embeddings)
 
 
 def cmd_search(args):
@@ -431,15 +386,11 @@ def main():
     p_embed.add_argument('--input', '-i', required=True, help='Input FASTA file')
     p_embed.add_argument('--output', '-o', required=True, help='Output .npy file for embeddings')
     p_embed.add_argument('--model', '-m', default='protein-vec',
-                         choices=['protein-vec', 'clean', 'esm'],
+                         choices=['protein-vec', 'clean'],
                          help='Embedding model (default: protein-vec)')
     p_embed.add_argument('--cpu', action='store_true', help='Force CPU even if GPU available')
     p_embed.add_argument('--clean-model', default='split100',
                          help='CLEAN model variant (default: split100)')
-    p_embed.add_argument('--esm-version', default='1b', choices=['1b', '2'],
-                         help='ESM version (default: 1b)')
-    p_embed.add_argument('--batch-size', type=int, default=4,
-                         help='Batch size for ESM (default: 4)')
     p_embed.set_defaults(func=cmd_embed)
 
     # search command
