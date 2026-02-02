@@ -196,3 +196,4 @@ _large_artifacts/
 data/protein_vec_models.gz
 _large_artifacts/
 *.pdf
+LOCAL_NOTES.md

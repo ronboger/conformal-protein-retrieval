@@ -1,7 +1,5 @@
-from setuptools import setup, find_packages
+# Legacy setup.py - kept for backwards compatibility
+# Configuration is in pyproject.toml
+from setuptools import setup
 
-setup(
-    name='protein_conformal',
-    package_dir={'': 'src'},
-    packages=find_packages(where='src'),
-)
+setup()
