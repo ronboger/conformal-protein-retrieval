@@ -27,14 +27,43 @@ from pathlib import Path
 
 
 def cmd_embed(args):
-    """Embed protein sequences using Protein-Vec."""
+    """Embed protein sequences using specified model."""
     import numpy as np
     import torch
     import gc
     from Bio import SeqIO
+
+    device = torch.device('cuda' if torch.cuda.is_available() and not args.cpu else 'cpu')
+    print(f"Using device: {device}")
+    print(f"Embedding model: {args.model}")
+
+    # Parse input sequences
+    print(f"Reading sequences from {args.input}...")
+    sequences = [str(record.seq) for record in SeqIO.parse(args.input, "fasta")]
+    print(f"Found {len(sequences)} sequences")
+
+    if args.model == 'protein-vec':
+        embeddings = _embed_protein_vec(sequences, device, args)
+    elif args.model == 'clean':
+        embeddings = _embed_clean(sequences, device, args)
+    elif args.model == 'esm':
+        embeddings = _embed_esm(sequences, device, args)
+    else:
+        print(f"Unknown model: {args.model}")
+        sys.exit(1)
+
+    print(f"Embeddings shape: {embeddings.shape}")
+    np.save(args.output, embeddings)
+    print(f"Saved embeddings to {args.output}")
+
+
+def _embed_protein_vec(sequences, device, args):
+    """Embed using Protein-Vec model."""
+    import numpy as np
+    import torch
+    import gc
     from transformers import T5EncoderModel, T5Tokenizer
 
-    # Add protein_vec_models to path
     repo_root = Path(__file__).parent.parent
     model_path = repo_root / "protein_vec_models"
     if not model_path.exists():
@@ -45,9 +74,6 @@ def cmd_embed(args):
     sys.path.insert(0, str(model_path))
     from model_protein_moe import trans_basic_block, trans_basic_block_Config
     from utils_search import featurize_prottrans, embed_vec
-
-    device = torch.device('cuda' if torch.cuda.is_available() and not args.cpu else 'cpu')
-    print(f"Using device: {device}")
 
     # Load ProtTrans model
     print("Loading ProtTrans T5 model...")
@@ -63,11 +89,6 @@ def cmd_embed(args):
     config = trans_basic_block_Config.from_json(str(vec_model_config))
     model_deep = trans_basic_block.load_from_checkpoint(str(vec_model_cpnt), config=config)
     model_deep = model_deep.to(device).eval()
-
-    # Parse input sequences
-    print(f"Reading sequences from {args.input}...")
-    sequences = [str(record.seq) for record in SeqIO.parse(args.input, "fasta")]
-    print(f"Found {len(sequences)} sequences")
 
     # Embedding masks (all aspects enabled)
     sampled_keys = np.array(['TM', 'PFAM', 'GENE3D', 'ENZYME', 'MFO', 'BPO', 'CCO'])
@@ -85,12 +106,101 @@ def cmd_embed(args):
         if (i + 1) % 10 == 0 or i == len(sequences) - 1:
             print(f"  Processed {i + 1}/{len(sequences)}")
 
-    embeddings = np.concatenate(embeddings)
-    print(f"Embeddings shape: {embeddings.shape}")
+    return np.concatenate(embeddings)
 
-    # Save
-    np.save(args.output, embeddings)
-    print(f"Saved embeddings to {args.output}")
+
+def _embed_clean(sequences, device, args):
+    """Embed using CLEAN model (for enzyme classification).
+
+    Requires CLEAN package: https://github.com/tttianhao/CLEAN
+    """
+    import numpy as np
+
+    try:
+        from CLEAN.utils import get_ec_id_dict
+        from CLEAN.model import LayerNormNet
+        import torch
+    except ImportError:
+        print("Error: CLEAN package not installed.")
+        print("Install from: https://github.com/tttianhao/CLEAN")
+        print("  git clone https://github.com/tttianhao/CLEAN.git")
+        print("  cd CLEAN && python setup.py install")
+        sys.exit(1)
+
+    # Load CLEAN model
+    model_file = args.clean_model or "split100"
+    print(f"Loading CLEAN model: {model_file}")
+
+    dtype = torch.float32
+    model = LayerNormNet(512, 128, device, dtype)
+
+    try:
+        checkpoint = torch.load(f'./data/pretrained/{model_file}.pth', map_location=device)
+        model.load_state_dict(checkpoint)
+    except FileNotFoundError:
+        print(f"Error: CLEAN model weights not found at ./data/pretrained/{model_file}.pth")
+        print("Download pretrained weights from the CLEAN repository.")
+        sys.exit(1)
+
+    model.eval()
+
+    # CLEAN uses ESM embeddings as input
+    print("Computing ESM embeddings for CLEAN...")
+    esm_embeddings = _embed_esm(sequences, device, args)
+
+    # Pass through CLEAN model
+    print("Computing CLEAN embeddings...")
+    with torch.no_grad():
+        esm_tensor = torch.tensor(esm_embeddings, dtype=dtype, device=device)
+        clean_embeddings = model(esm_tensor).cpu().numpy()
+
+    return clean_embeddings
+
+
+def _embed_esm(sequences, device, args):
+    """Embed using ESM-1b or ESM2 model."""
+    import numpy as np
+    import torch
+
+    try:
+        import esm
+    except ImportError:
+        print("Error: ESM package not installed.")
+        print("Install with: pip install fair-esm")
+        sys.exit(1)
+
+    esm_version = getattr(args, 'esm_version', '1b')
+    print(f"Loading ESM-{esm_version} model...")
+
+    if esm_version == '2':
+        model, alphabet = esm.pretrained.esm2_t33_650M_UR50D()
+    else:
+        model, alphabet = esm.pretrained.esm1b_t33_650M_UR50S()
+
+    batch_converter = alphabet.get_batch_converter()
+    model = model.to(device).eval()
+
+    # Process in batches
+    batch_size = getattr(args, 'batch_size', 4)
+    embeddings = []
+
+    for i in range(0, len(sequences), batch_size):
+        batch_seqs = sequences[i:i+batch_size]
+        batch_data = [(f"seq_{j}", seq) for j, seq in enumerate(batch_seqs)]
+
+        _, _, batch_tokens = batch_converter(batch_data)
+        batch_tokens = batch_tokens.to(device)
+
+        with torch.no_grad():
+            results = model(batch_tokens, repr_layers=[33], return_contacts=False)
+            # Mean pooling over sequence length
+            batch_emb = results["representations"][33].mean(dim=1).cpu().numpy()
+            embeddings.append(batch_emb)
+
+        if (i + batch_size) % 20 == 0 or i + batch_size >= len(sequences):
+            print(f"  Processed {min(i + batch_size, len(sequences))}/{len(sequences)}")
+
+    return np.concatenate(embeddings)
 
 
 def cmd_search(args):
@@ -163,9 +273,15 @@ def cmd_verify(args):
     elif args.check == 'fdr':
         script = repo_root / "scripts" / "verify_fdr_algorithm.py"
         print("Running FDR algorithm verification...")
+    elif args.check == 'dali':
+        script = repo_root / "scripts" / "verify_dali.py"
+        print("Running DALI prefiltering verification (Paper Tables 4-6)...")
+    elif args.check == 'clean':
+        script = repo_root / "scripts" / "verify_clean.py"
+        print("Running CLEAN enzyme classification verification (Paper Tables 1-2)...")
     else:
         print(f"Unknown check: {args.check}")
-        print("Available checks: syn30, fdr")
+        print("Available checks: syn30, fdr, dali, clean")
         sys.exit(1)
 
     subprocess.run([sys.executable, str(script)], check=True)
@@ -311,10 +427,19 @@ def main():
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
 
     # embed command
-    p_embed = subparsers.add_parser('embed', help='Embed protein sequences using Protein-Vec')
+    p_embed = subparsers.add_parser('embed', help='Embed protein sequences')
     p_embed.add_argument('--input', '-i', required=True, help='Input FASTA file')
     p_embed.add_argument('--output', '-o', required=True, help='Output .npy file for embeddings')
+    p_embed.add_argument('--model', '-m', default='protein-vec',
+                         choices=['protein-vec', 'clean', 'esm'],
+                         help='Embedding model (default: protein-vec)')
     p_embed.add_argument('--cpu', action='store_true', help='Force CPU even if GPU available')
+    p_embed.add_argument('--clean-model', default='split100',
+                         help='CLEAN model variant (default: split100)')
+    p_embed.add_argument('--esm-version', default='1b', choices=['1b', '2'],
+                         help='ESM version (default: 1b)')
+    p_embed.add_argument('--batch-size', type=int, default=4,
+                         help='Batch size for ESM (default: 4)')
     p_embed.set_defaults(func=cmd_embed)
 
     # search command
@@ -329,7 +454,7 @@ def main():
 
     # verify command
     p_verify = subparsers.add_parser('verify', help='Verify paper results')
-    p_verify.add_argument('--check', '-c', required=True, choices=['syn30', 'fdr'],
+    p_verify.add_argument('--check', '-c', required=True, choices=['syn30', 'fdr', 'dali', 'clean'],
                           help='Which verification to run')
     p_verify.set_defaults(func=cmd_verify)
 
