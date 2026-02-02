@@ -1,0 +1,68 @@
+Bootstrap: docker
+From: pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
+
+%labels
+    Author Ron Boger <ronboger@berkeley.edu>
+    Version 1.0
+    Description Conformal Protein Retrieval - Functional protein mining with statistical guarantees
+
+%post
+    # Update and install system dependencies
+    apt-get update && apt-get install -y \
+        git \
+        wget \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Install Python dependencies
+    pip install --no-cache-dir \
+        numpy \
+        pandas \
+        scipy \
+        scikit-learn \
+        matplotlib \
+        seaborn \
+        tqdm \
+        faiss-gpu \
+        biopython \
+        pytorch-lightning \
+        h5py \
+        transformers \
+        sentencepiece \
+        gradio>=4.0.0
+
+    # Create workspace
+    mkdir -p /workspace/data /workspace/results /workspace/protein_vec_models
+
+%environment
+    export PYTHONPATH=/workspace
+    export GRADIO_SERVER_NAME=0.0.0.0
+    export GRADIO_SERVER_PORT=7860
+
+%runscript
+    echo "Conformal Protein Retrieval (CPR)"
+    echo "Usage:"
+    echo "  apptainer run cpr.sif cpr --help"
+    echo "  apptainer run cpr.sif python -m protein_conformal.gradio_app"
+    exec "$@"
+
+%help
+    Conformal Protein Retrieval (CPR)
+
+    This container provides tools for functional protein mining with
+    conformal guarantees, as described in:
+    "Functional protein mining with conformal guarantees"
+    Nature Communications (2025) 16:85
+
+    Usage:
+      # Run CLI
+      apptainer exec cpr.sif cpr embed --input seqs.fasta --output emb.npy
+      apptainer exec cpr.sif cpr search --query q.npy --database db.npy -o results.csv
+
+      # Run Gradio UI
+      apptainer exec cpr.sif python -m protein_conformal.gradio_app
+
+      # Interactive shell
+      apptainer shell cpr.sif
+
+    Build:
+      apptainer build cpr.sif apptainer.def
