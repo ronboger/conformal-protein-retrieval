@@ -84,6 +84,45 @@
 
 ---
 
+### 2026-02-02 ~11:00 PST - Server Session (Verification & CLI)
+
+**Completed:**
+- [x] Verified JCVI Syn3.0 result: **59/149 = 39.6%** ✓ MATCHES PAPER
+- [x] Fixed FDR threshold bug (`get_thresh_FDR` now handles 1D and 2D arrays)
+- [x] Fixed numpy deprecation warnings (`interpolation=` → `method=`)
+- [x] Fixed test suite - all 27 tests pass
+- [x] Created CLI: `cpr embed`, `cpr search`, `cpr verify`
+- [x] Extracted Protein-Vec models and copied necessary Python files
+- [x] Fixed `setup.py` conflict with `pyproject.toml`
+- [x] Fixed `__init__.py` to not require gradio for core imports
+- [x] Created `DATA.md` documenting data requirements (GitHub vs Zenodo)
+- [x] Created `LOCAL_NOTES.md` (gitignored) for cluster-specific info
+- [x] Organized `unknown_aa_seqs.*` files into `data/gene_unknown/`
+
+**Key Files Changed:**
+- `protein_conformal/__init__.py` - Made gradio import optional
+- `protein_conformal/util.py` - Fixed FDR bug, numpy deprecation
+- `protein_conformal/cli.py` - NEW: CLI entry point
+- `tests/test_util.py` - Fixed incorrect test expectation
+- `setup.py` - Fixed src/ directory reference
+- `DATA.md` - NEW: Data documentation
+
+**Verification Results:**
+- FDR threshold (α=0.1): λ = 0.999980225003127
+- Syn3.0 hits: 59/149 = 39.6% (matches paper Figure 2A)
+
+**Environment:**
+- Conda env: `conformal-s` (Python 3.11.10)
+- Key packages: faiss 1.9.0, torch 2.5.0, numpy 1.26.4
+
+**Next Steps:**
+1. Merge undergrad's gradio branch (`origin/gradio`)
+2. Verify CLEAN enzyme results (Tables 1-2)
+3. Verify DALI prefiltering results (Tables 4-6)
+4. Add more integration tests for paper results
+
+---
+
 ### Session Notes Template
 
 ```

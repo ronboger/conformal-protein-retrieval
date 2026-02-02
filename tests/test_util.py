@@ -177,15 +177,21 @@ class TestConformalThresholds:
         # Threshold should be in valid similarity range
         assert sims.min() <= lhat <= sims.max()
 
-    def test_threshold_increases_with_lower_alpha(self, scope_like_data):
-        """Test that more stringent alpha leads to higher threshold."""
+    def test_threshold_decreases_with_lower_alpha(self, scope_like_data):
+        """Test that more stringent alpha leads to lower threshold for FNR control.
+
+        For FNR (false negative rate) control via get_thresh_new:
+        - Lower alpha = more stringent = want fewer false negatives
+        - Algorithm picks a lower quantile of positive similarities
+        - Lower quantile = lower threshold = accept more matches
+        """
         sims, labels = scope_like_data
 
         lhat_10 = get_thresh_new(sims, labels, alpha=0.1)
         lhat_05 = get_thresh_new(sims, labels, alpha=0.05)
 
-        # Lower alpha (more stringent) should give higher threshold
-        assert lhat_05 >= lhat_10
+        # Lower alpha (more stringent FNR) should give lower threshold
+        assert lhat_05 <= lhat_10
 
     def test_get_thresh_FDR_returns_risk(self, scope_like_data):
         """Test that get_thresh_FDR returns both threshold and risk."""
