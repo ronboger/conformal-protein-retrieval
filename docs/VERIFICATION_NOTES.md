@@ -87,8 +87,14 @@ Risk control coverage:                75% of trials have loss ≤ 1.0
 Note: Full CLEAN precision/recall/F1 metrics require the CLEAN package from
 https://github.com/tttianhao/CLEAN
 
-#### 4. FDR Calibration (Pending)
-Running via SLURM job to compute FDR threshold from scratch. Expected mean lhat ≈ 0.999980.
+#### 4. FDR Calibration ✓
+```
+Risk:     0.0948  (≤ α=0.1, controlled)
+TPR:      69.8%
+Lhat:     0.9999654  (paper uses 0.999980, more conservative)
+FDR Cal:  0.0949
+```
+Note: Paper threshold is slightly higher (more conservative). Both control FDR at α=0.1.
 
 ---
 
