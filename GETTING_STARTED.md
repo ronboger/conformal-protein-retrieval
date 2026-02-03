@@ -145,6 +145,22 @@ cpr verify --check syn30    # Verify JCVI Syn3.0 result (39.6% annotation)
 cpr verify --check all      # Run all verification checks
 ```
 
+### Test with Included Data
+
+The repo includes JCVI Syn3.0 sequences for testing:
+
+```bash
+# Test search with included FASTA (requires Zenodo data downloaded)
+cpr search --input data/gene_unknown/unknown_aa_seqs.fasta --output test_results.csv --fdr 0.1
+
+# Or use pre-computed embeddings (faster, no model weights needed)
+cpr search --input data/gene_unknown/unknown_aa_seqs.npy \
+           --database data/lookup_embeddings.npy \
+           --output test_results.csv --fdr 0.1
+
+# Expected: ~59 hits (39.6% of 149 sequences)
+```
+
 ---
 
 ## FDR/FNR Threshold Reference
