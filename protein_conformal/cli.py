@@ -206,21 +206,13 @@ def _embed_clean(sequences, device, args):
 
 
 def _get_fdr_threshold(alpha: float) -> float:
-    """Look up FDR threshold from precomputed table."""
+    """Look up FDR threshold from precomputed table or paper value."""
     import pandas as pd
 
     repo_root = Path(__file__).parent.parent
     threshold_file = repo_root / "results" / "fdr_thresholds.csv"
 
-    # Fallback values if table not found (from paper)
-    FALLBACK_THRESHOLDS = {
-        0.01: 0.999992,
-        0.05: 0.999985,
-        0.10: 0.999980,
-        0.15: 0.999975,
-        0.20: 0.999970,
-    }
-
+    # Try to load from precomputed table first
     if threshold_file.exists():
         try:
             df = pd.read_csv(threshold_file)
@@ -231,9 +223,23 @@ def _get_fdr_threshold(alpha: float) -> float:
         except Exception:
             pass
 
-    # Use fallback
-    closest_alpha = min(FALLBACK_THRESHOLDS.keys(), key=lambda x: abs(x - alpha))
-    return FALLBACK_THRESHOLDS[closest_alpha]
+    # Paper-verified value for α=0.1 (from 100 calibration trials)
+    # See docs/REPRODUCIBILITY.md for details
+    PAPER_THRESHOLD_ALPHA_0_1 = 0.999980225003127
+
+    if abs(alpha - 0.1) < 0.001:
+        return PAPER_THRESHOLD_ALPHA_0_1
+
+    # For other alpha values, warn user and provide rough estimate
+    # The threshold decreases as alpha increases (more permissive)
+    print(f"  Warning: No verified threshold for α={alpha}")
+    print(f"  Using interpolation from paper value (α=0.1 → λ=0.99998)")
+    print(f"  For accurate thresholds, run: cpr calibrate --alpha {alpha}")
+
+    # Rough linear interpolation based on observed pattern
+    # At α=0.1, λ≈0.99998; threshold decreases ~0.00001 per 0.1 alpha increase
+    estimated = PAPER_THRESHOLD_ALPHA_0_1 + (0.1 - alpha) * 0.0001
+    return max(0.9998, min(0.99999, estimated))
 
 
 def cmd_search(args):
