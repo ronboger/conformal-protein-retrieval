@@ -6,7 +6,19 @@ From: pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
     Version 1.0
     Description Conformal Protein Retrieval - Functional protein mining with statistical guarantees
 
+%setup
+    # Create mount points in the container rootfs BEFORE the container is created
+    # This runs on the host and $APPTAINER_ROOTFS points to the container's root
+    # Required because the system may try to bind mount these paths during build
+    mkdir -p ${APPTAINER_ROOTFS}/shared
+    mkdir -p ${APPTAINER_ROOTFS}/scratch
+    mkdir -p ${APPTAINER_ROOTFS}/groups
+    mkdir -p ${APPTAINER_ROOTFS}/home
+
 %post
+    # Ensure mount points exist (redundant but safe)
+    mkdir -p /shared /scratch /groups /home
+
     # Update and install system dependencies
     apt-get update && apt-get install -y \
         git \
