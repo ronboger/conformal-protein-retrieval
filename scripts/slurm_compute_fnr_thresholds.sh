@@ -32,7 +32,7 @@ echo "=== Computing EXACT match FNR thresholds ==="
 python scripts/compute_fnr_table.py \
     --calibration data/pfam_new_proteins.npy \
     --output results/fnr_thresholds.csv \
-    --n-trials 100 \
+    --n-trials 10 \
     --n-calib 1000 \
     --seed 42
 
@@ -41,7 +41,7 @@ echo "=== Computing PARTIAL match FNR thresholds ==="
 python scripts/compute_fnr_table.py \
     --calibration data/pfam_new_proteins.npy \
     --output results/fnr_thresholds_partial.csv \
-    --n-trials 100 \
+    --n-trials 10 \
     --n-calib 1000 \
     --seed 42 \
     --partial

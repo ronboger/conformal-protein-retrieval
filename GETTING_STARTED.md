@@ -197,6 +197,23 @@ Full table in `results/fdr_thresholds.csv`.
 
 ---
 
+## DALI Structural Prefiltering Thresholds
+
+For structural homology search (DALI + AFDB), we use z-score thresholds instead of similarity thresholds:
+
+| Metric | Value | Description |
+|--------|-------|-------------|
+| **elbow_z** | **~5.1** | Z-score threshold for prefiltering |
+| TPR | 81.8% | True Positive Rate at elbow threshold |
+| FNR | 18.2% | False Negative Rate (miss rate) |
+| DB Reduction | 31.5% | Fraction of database filtered out |
+
+Pre-computed results are in `results/dali_thresholds.csv` (73 trials from paper experiments).
+
+**Usage**: When running DALI, filter candidates with z-score ≥ 5.1 to achieve ~82% TPR while reducing database size by ~31%.
+
+---
+
 ## Model Weights
 
 ### Protein-Vec (General Protein Search)

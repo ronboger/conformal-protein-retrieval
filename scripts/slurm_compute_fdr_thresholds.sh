@@ -31,7 +31,7 @@ echo ""
 python scripts/compute_fdr_table.py \
     --calibration data/pfam_new_proteins.npy \
     --output results/fdr_thresholds.csv \
-    --n-trials 100 \
+    --n-trials 10 \
     --n-calib 1000 \
     --seed 42
 
