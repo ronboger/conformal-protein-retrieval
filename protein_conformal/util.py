@@ -351,7 +351,7 @@ def std_loss_1d(sims, labels, lam):
     return 0.01
 
 
-def get_thresh_FDR(labels, sims, alpha, delta=0.5, N=5000):
+def get_thresh_FDR(labels, sims, alpha, delta=0.5, N=100):
     """
     Calculate the threshold value for controlling the False Discovery Rate (FDR) using Learn then Test (LTT).
 
@@ -360,7 +360,7 @@ def get_thresh_FDR(labels, sims, alpha, delta=0.5, N=5000):
     - sims (numpy.ndarray): The similarity scores of the data points. Can be 1D or 2D.
     - alpha (float): The significance level for controlling the FDR.
     - delta (float, optional): p-value limit. Defaults to 0.5.
-    - N (int, optional): The number of lambda values to consider. Defaults to 5000.
+    - N (int, optional): The number of lambda values to consider. Defaults to 100.
 
     Returns:
     - lhat (float): The threshold value for controlling the FDR.
