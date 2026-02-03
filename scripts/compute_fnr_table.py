@@ -117,6 +117,12 @@ def main():
         action='store_true',
         help='Use partial matches (at least one Pfam domain matches)'
     )
+    parser.add_argument(
+        '--alpha-levels',
+        type=str,
+        default=None,
+        help='Comma-separated alpha levels (default: 0.001,0.005,0.01,0.02,0.05,0.1,0.15,0.2)'
+    )
 
     args = parser.parse_args()
 
@@ -125,8 +131,12 @@ def main():
         suffix = '_partial' if args.partial else ''
         args.output = Path(f'results/fnr_thresholds{suffix}.csv')
 
-    # Standard alpha levels that users commonly need
-    alpha_levels = [0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2]
+    # Parse alpha levels (custom or default)
+    if args.alpha_levels:
+        alpha_levels = [float(x.strip()) for x in args.alpha_levels.split(',')]
+    else:
+        # Standard alpha levels that users commonly need
+        alpha_levels = [0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2]
 
     match_type = "partial" if args.partial else "exact"
     print(f"Computing FNR thresholds ({match_type} matches)")
