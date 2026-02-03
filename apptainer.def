@@ -26,6 +26,7 @@ From: pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime
         && rm -rf /var/lib/apt/lists/*
 
     # Install Python dependencies
+    # Note: faiss-cpu used here; for GPU, install faiss-gpu via conda
     pip install --no-cache-dir \
         numpy \
         pandas \
@@ -34,7 +35,7 @@ From: pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime
         matplotlib \
         seaborn \
         tqdm \
-        faiss-gpu \
+        faiss-cpu \
         biopython \
         pytorch-lightning \
         h5py \
