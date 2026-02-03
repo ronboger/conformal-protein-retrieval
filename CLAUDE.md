@@ -192,6 +192,50 @@ The correct dataset (`pfam_new_proteins.npy`) has diverse families and matches p
 
 ---
 
+### 2026-02-03 ~09:30 PST - Threshold Computation & CLEAN Integration
+
+**Completed:**
+- [x] Fixed Apptainer mount point issue (`%setup` section creates dirs before container init)
+- [x] Submitted FDR threshold job (100 trials × 8 alpha levels) - Job 1012489
+- [x] Created `scripts/compute_fnr_table.py` for FNR threshold computation
+- [x] Added `--partial` flag to both FDR and FNR scripts for partial match support
+- [x] Submitted FNR threshold job - Job 1012530
+- [x] Tested CLEAN embeddings on GPU - **WORKING**
+- [x] Committed and pushed Apptainer fixes to origin
+
+**CLEAN Embedding Test Results:**
+```
+GPU: NVIDIA H200
+Embeddings shape: (2, 128)  # CLEAN uses 128-dim, not 1024 like Protein-Vec
+Min: -2.7802, Max: 2.5827, Mean: 0.0498
+```
+- Requires: `pip install fair-esm>=2.0.0`
+- CLEAN model weights: `CLEAN_repo/app/data/pretrained/CLEAN_pretrained/`
+
+**Blocked:**
+- **Apptainer build**: glibc 2.33/2.34 mismatch - PyTorch 2.1.0 has older glibc than cluster's fakeroot
+  - **Fix**: Update to `pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime` base image
+
+**Running Jobs:**
+- Job 1012489: FDR thresholds (exact match) - ~50 min, still on α=0.001
+- Job 1012530: FNR thresholds (exact + partial) - just started
+
+**Files Created/Modified:**
+- `scripts/compute_fnr_table.py` - NEW: FNR threshold computation
+- `scripts/slurm_compute_fnr_thresholds.sh` - NEW: SLURM job for FNR
+- `scripts/compute_fdr_table.py` - Added `--partial` flag
+- `scripts/slurm_compute_fdr_thresholds.sh` - Increased time/memory
+- `apptainer.def` - Added `%setup` section for mount points
+
+**Next Steps:**
+1. Wait for FDR job to complete, verify α=0.1 ≈ 0.999980225
+2. Submit partial match FDR job once exact matches verified
+3. Update README with CLEAN embedding instructions
+4. Update Apptainer base image to PyTorch 2.4+
+5. Update GETTING_STARTED.md with computed thresholds
+
+---
+
 ### Session Notes Template
 
 ```

@@ -32,7 +32,8 @@ echo ""
 
 # Build the container
 # The %setup section in apptainer.def creates mount points before container init
-apptainer build --fakeroot cpr.sif apptainer.def
+# Use --userns instead of --fakeroot to avoid glibc version mismatch
+apptainer build --userns cpr.sif apptainer.def
 
 BUILD_STATUS=$?
 
