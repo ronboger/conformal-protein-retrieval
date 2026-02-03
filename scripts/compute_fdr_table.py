@@ -59,8 +59,8 @@ def compute_fdr_threshold(cal_data, alpha: float, n_trials: int = 100,
         # Get similarity scores and labels
         X_cal, y_cal = get_sims_labels(trial_data, partial=partial)
 
-        # Compute threshold
-        l_hat, risk = get_thresh_FDR(X_cal, y_cal, alpha=alpha)
+        # Compute threshold (note: get_thresh_FDR expects labels, sims, alpha)
+        l_hat, risk = get_thresh_FDR(y_cal, X_cal, alpha=alpha)
 
         thresholds.append(l_hat)
         risks.append(risk)

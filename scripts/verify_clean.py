@@ -31,7 +31,7 @@ def main():
     print()
 
     # Load pre-computed CLEAN data
-    data_file = repo_root / "clean_selection" / "clean_new_v_ec_cluster.npy"
+    data_file = repo_root / "notebooks_archive" / "clean_selection" / "clean_new_v_ec_cluster.npy"
 
     if not data_file.exists():
         print(f"ERROR: CLEAN data not found at {data_file}")
