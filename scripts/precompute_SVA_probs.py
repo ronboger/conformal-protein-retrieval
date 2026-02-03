@@ -80,12 +80,13 @@ def parse_args():
     parser.add_argument(
         "--cal_data",
         type=str,
-        default="/groups/doudna/projects/ronb/conformal_backup/protein-conformal/data/pfam_new_proteins.npy"
+        default="data/pfam_new_proteins.npy",
+        help="Calibration dataset (use pfam_new_proteins.npy, NOT the backup with leakage)"
     )
     parser.add_argument(
         "--output",
         type=str,
-        default="/groups/doudna/projects/ronb/conformal_backup/results_with_probs.csv",
+        default="data/sim2prob_lookup.csv",
         help="Output file for the dataframe mapping similarities to probabilities",
     )
     parser.add_argument(
