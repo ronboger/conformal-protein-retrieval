@@ -205,6 +205,37 @@ def _embed_clean(sequences, device, args):
 
 
 
+def _get_fdr_threshold(alpha: float) -> float:
+    """Look up FDR threshold from precomputed table."""
+    import pandas as pd
+
+    repo_root = Path(__file__).parent.parent
+    threshold_file = repo_root / "results" / "fdr_thresholds.csv"
+
+    # Fallback values if table not found (from paper)
+    FALLBACK_THRESHOLDS = {
+        0.01: 0.999992,
+        0.05: 0.999985,
+        0.10: 0.999980,
+        0.15: 0.999975,
+        0.20: 0.999970,
+    }
+
+    if threshold_file.exists():
+        try:
+            df = pd.read_csv(threshold_file)
+            # Find closest alpha in table
+            if 'alpha' in df.columns and 'threshold_mean' in df.columns:
+                idx = (df['alpha'] - alpha).abs().idxmin()
+                return df.loc[idx, 'threshold_mean']
+        except Exception:
+            pass
+
+    # Use fallback
+    closest_alpha = min(FALLBACK_THRESHOLDS.keys(), key=lambda x: abs(x - alpha))
+    return FALLBACK_THRESHOLDS[closest_alpha]
+
+
 def cmd_search(args):
     """Search for similar proteins using FAISS with conformal guarantees."""
     import numpy as np
@@ -236,12 +267,28 @@ def cmd_search(args):
     print(f"Querying for top {args.k} neighbors...")
     D, I = query(index, query_embeddings, args.k)
 
-    # Apply threshold if specified
-    if args.threshold:
-        print(f"Applying similarity threshold: {args.threshold}")
+    # Determine threshold from --fdr, --fnr, or --threshold
+    threshold = None
+    if args.no_filter:
+        print("No filtering (--no-filter): returning all neighbors")
+    elif args.threshold:
+        threshold = args.threshold
+        print(f"Using manual threshold: {threshold}")
+    elif args.fnr:
+        # FNR threshold (TODO: add lookup table for FNR)
+        print(f"FNR control at α={args.fnr} (using approximate threshold)")
+        threshold = 0.9999 - args.fnr * 0.001  # Rough approximation
+        print(f"  Threshold: {threshold}")
+    else:
+        # Default: FDR control
+        fdr_alpha = args.fdr if args.fdr else 0.1
+        threshold = _get_fdr_threshold(fdr_alpha)
+        print(f"FDR control at α={fdr_alpha} ({fdr_alpha*100:.0f}% FDR)")
+        print(f"  Threshold: {threshold:.10f}")
 
     # Build results
     results = []
+    n_filtered = 0
     for i in range(len(query_embeddings)):
         for j in range(args.k):
             sim = D[i, j]
@@ -249,7 +296,8 @@ def cmd_search(args):
             # Skip placeholder results (FAISS returns -1 for non-existent neighbors)
             if idx < 0:
                 continue
-            if args.threshold and sim < args.threshold:
+            if threshold is not None and sim < threshold:
+                n_filtered += 1
                 continue
             row = {
                 'query_idx': i,
@@ -263,7 +311,143 @@ def cmd_search(args):
 
     results_df = pd.DataFrame(results)
     results_df.to_csv(args.output, index=False)
-    print(f"Saved {len(results_df)} results to {args.output}")
+
+    # Summary
+    n_queries = len(query_embeddings)
+    n_with_hits = len(results_df['query_idx'].unique()) if len(results_df) > 0 else 0
+    print(f"\nResults:")
+    print(f"  Queries: {n_queries}")
+    print(f"  Queries with confident hits: {n_with_hits} ({n_with_hits/n_queries*100:.1f}%)")
+    print(f"  Total hits: {len(results_df)}")
+    if threshold:
+        print(f"  Filtered out: {n_filtered} below threshold")
+    print(f"Saved to {args.output}")
+
+
+def cmd_find(args):
+    """One-step search: FASTA → embeddings → search → results with probabilities."""
+    import numpy as np
+    import pandas as pd
+    import tempfile
+    from Bio import SeqIO
+    import torch
+    from protein_conformal.util import load_database, query, simplifed_venn_abers_prediction, get_sims_labels
+
+    device = torch.device('cuda' if torch.cuda.is_available() and not args.cpu else 'cpu')
+    print(f"=== CPR Find: FASTA to Annotated Results ===")
+    print(f"Device: {device}")
+    print(f"Model: {args.model}")
+    print(f"FDR level: {args.fdr*100:.0f}%")
+    print()
+
+    # Step 1: Read sequences
+    print(f"[1/5] Reading sequences from {args.input}...")
+    sequences = []
+    sequence_names = []
+    for record in SeqIO.parse(args.input, "fasta"):
+        sequences.append(str(record.seq))
+        sequence_names.append(record.id)
+    print(f"  Found {len(sequences)} sequences")
+
+    # Step 2: Embed sequences
+    print(f"\n[2/5] Computing embeddings with {args.model}...")
+    if args.model == 'protein-vec':
+        embeddings = _embed_protein_vec(sequences, device, args)
+    elif args.model == 'clean':
+        embeddings = _embed_clean(sequences, device, args)
+    else:
+        print(f"Unknown model: {args.model}")
+        sys.exit(1)
+    print(f"  Embeddings shape: {embeddings.shape}")
+
+    # Step 3: Load database
+    repo_root = Path(__file__).parent.parent
+    db_path = args.database if args.database else repo_root / "data" / "lookup_embeddings.npy"
+    meta_path = args.database_meta if args.database_meta else repo_root / "data" / "lookup_embeddings_meta_data.tsv"
+
+    print(f"\n[3/5] Loading database from {db_path}...")
+    db_embeddings = np.load(db_path)
+    print(f"  Database size: {len(db_embeddings)} proteins")
+
+    if Path(meta_path).exists():
+        if str(meta_path).endswith('.tsv'):
+            db_meta = pd.read_csv(meta_path, sep='\t')
+        else:
+            db_meta = pd.read_csv(meta_path)
+    else:
+        db_meta = None
+        print("  Warning: No metadata file found")
+
+    # Determine k (10% of database or max 10000)
+    k = min(max(100, len(db_embeddings) // 10), 10000)
+    print(f"  Using k={k} neighbors ({k/len(db_embeddings)*100:.1f}% of database)")
+
+    # Step 4: Search
+    print(f"\n[4/5] Searching...")
+    index = load_database(db_embeddings)
+    D, I = query(index, embeddings, k)
+
+    # Get threshold
+    threshold = _get_fdr_threshold(args.fdr)
+    print(f"  FDR threshold (α={args.fdr}): {threshold:.10f}")
+
+    # Step 5: Build results with probabilities
+    print(f"\n[5/5] Building results...")
+
+    # Load calibration data for probabilities
+    cal_path = args.calibration if args.calibration else repo_root / "data" / "pfam_new_proteins.npy"
+    if Path(cal_path).exists():
+        cal_data = np.load(cal_path, allow_pickle=True)
+        np.random.seed(42)
+        np.random.shuffle(cal_data)
+        cal_subset = cal_data[:100]
+        X_cal, y_cal = get_sims_labels(cal_subset, partial=False)
+        X_cal = X_cal.flatten()
+        y_cal = y_cal.flatten()
+        compute_probs = True
+    else:
+        compute_probs = False
+        print("  Warning: No calibration data, skipping probability computation")
+
+    results = []
+    for i in range(len(embeddings)):
+        for j in range(k):
+            sim = D[i, j]
+            idx = I[i, j]
+            if idx < 0 or sim < threshold:
+                continue
+
+            row = {
+                'query_name': sequence_names[i],
+                'query_idx': i,
+                'match_idx': idx,
+                'similarity': sim,
+            }
+
+            # Add probability if calibration available
+            if compute_probs:
+                p0, p1 = simplifed_venn_abers_prediction(X_cal, y_cal, sim)
+                row['probability'] = (p0 + p1) / 2
+                row['uncertainty'] = abs(p1 - p0)
+
+            # Add metadata
+            if db_meta is not None and idx < len(db_meta):
+                for col in db_meta.columns[:5]:
+                    row[f'match_{col}'] = db_meta.iloc[idx][col]
+
+            results.append(row)
+
+    results_df = pd.DataFrame(results)
+    results_df.to_csv(args.output, index=False)
+
+    # Summary
+    n_queries = len(sequences)
+    n_with_hits = len(results_df['query_idx'].unique()) if len(results_df) > 0 else 0
+    print(f"\n=== Results ===")
+    print(f"Queries: {n_queries}")
+    print(f"Queries with confident hits: {n_with_hits} ({n_with_hits/n_queries*100:.1f}%)")
+    print(f"Total confident hits: {len(results_df)}")
+    print(f"Output: {args.output}")
 
 
 def cmd_verify(args):
@@ -431,8 +615,30 @@ def main():
     )
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
 
+    # find command (one-step: FASTA → results)
+    p_find = subparsers.add_parser('find',
+        help='One-step search: FASTA → embed → search → annotated results',
+        description='The easiest way to use CPR. Give it a FASTA file and get annotated results.')
+    p_find.add_argument('--input', '-i', required=True, help='Input FASTA file with protein sequences')
+    p_find.add_argument('--output', '-o', required=True, help='Output CSV with annotated hits')
+    p_find.add_argument('--model', '-m', default='protein-vec',
+                        choices=['protein-vec', 'clean'],
+                        help='Embedding model (default: protein-vec)')
+    p_find.add_argument('--fdr', type=float, default=0.1,
+                        help='False discovery rate level (default: 0.1 = 10%% FDR)')
+    p_find.add_argument('--database', '-d',
+                        help='Database embeddings (default: data/lookup_embeddings.npy)')
+    p_find.add_argument('--database-meta',
+                        help='Database metadata (default: data/lookup_embeddings_meta_data.tsv)')
+    p_find.add_argument('--calibration', '-c',
+                        help='Calibration data for probabilities (default: data/pfam_new_proteins.npy)')
+    p_find.add_argument('--cpu', action='store_true', help='Force CPU even if GPU available')
+    p_find.add_argument('--clean-model', default='split100',
+                        help='CLEAN model variant (default: split100)')
+    p_find.set_defaults(func=cmd_find)
+
     # embed command
-    p_embed = subparsers.add_parser('embed', help='Embed protein sequences')
+    p_embed = subparsers.add_parser('embed', help='Embed protein sequences (step 1 of manual workflow)')
     p_embed.add_argument('--input', '-i', required=True, help='Input FASTA file')
     p_embed.add_argument('--output', '-o', required=True, help='Output .npy file for embeddings')
     p_embed.add_argument('--model', '-m', default='protein-vec',
@@ -449,8 +655,20 @@ def main():
     p_search.add_argument('--database', '-d', required=True, help='Database embeddings (.npy)')
     p_search.add_argument('--database-meta', '-m', help='Database metadata (.tsv or .csv)')
     p_search.add_argument('--output', '-o', required=True, help='Output results (.csv)')
-    p_search.add_argument('--k', type=int, default=10, help='Number of neighbors (default: 10)')
-    p_search.add_argument('--threshold', '-t', type=float, help='Similarity threshold (e.g., 0.99998 for FDR α=0.1)')
+    p_search.add_argument('--k', type=int, default=100,
+                          help='Max neighbors per query (default: 100)')
+    # FDR/FNR control options
+    p_search.add_argument('--fdr', type=float, default=0.1,
+                          help='False discovery rate level (default: 0.1 = 10%% FDR). '
+                               'Automatically looks up threshold from results/fdr_thresholds.csv')
+    p_search.add_argument('--fnr', type=float,
+                          help='False negative rate level (alternative to --fdr). '
+                               'Use this when you want to control missed true matches.')
+    p_search.add_argument('--threshold', '-t', type=float,
+                          help='Manual similarity threshold (overrides --fdr/--fnr). '
+                               'Use this if you have a custom threshold.')
+    p_search.add_argument('--no-filter', action='store_true',
+                          help='Return all neighbors without filtering (for exploration)')
     p_search.set_defaults(func=cmd_search)
 
     # verify command

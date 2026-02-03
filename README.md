@@ -2,27 +2,44 @@
 
 Code and notebooks from [Functional protein mining with conformal guarantees](https://www.nature.com/articles/s41467-024-55676-y) (Nature Communications, 2025). This package provides statistically rigorous methods for protein database search with false discovery rate (FDR) and false negative rate (FNR) control.
 
-All data files can be found in [our Zenodo repository](https://zenodo.org/records/14272215). Results can be reproduced through executing the data preparation notebooks in each subdirectory.
+**[→ GETTING STARTED](GETTING_STARTED.md)** - Quick setup guide (10 minutes)
 
-## Installation
+## Quick Setup
 
-Clone the repository and install dependencies:
 ```bash
+# 1. Clone and install
 git clone https://github.com/ronboger/conformal-protein-retrieval.git
 cd conformal-protein-retrieval
 pip install -e .
+
+# 2. Download data from Zenodo (4GB total)
+# https://zenodo.org/records/14272215
+#   → lookup_embeddings.npy (1.1 GB) → data/
+#   → lookup_embeddings_meta_data.tsv (535 MB) → data/
+#   → pfam_new_proteins.npy (2.4 GB) → data/
+
+# 3. Verify setup
+cpr verify --check syn30
+# Expected: 59/149 = 39.6% hits at FDR α=0.1
 ```
 
-This will install the `cpr` command-line interface for embedding, search, and calibration.
+See **[GETTING_STARTED.md](GETTING_STARTED.md)** for detailed instructions.
 
-## Structure
+## Repository Structure
 
-- `./protein_conformal`: utility functions to creating confidence sets and assigning probabilities to any protein machine learning model for search
-- `./scope`: experiments pertraining to SCOPe
-- `./pfam`: notebooks demonstrating how to use our techniques to calibrate false discovery and false negative rates for different pfam classes
-- `./ec`: experiments pertraining to EC number classification on uniprot
-- `./data`: scripts and notebooks used to process data
-- `./clean_selection`: scripts and notebooks used to process data
+```
+conformal-protein-retrieval/
+├── protein_conformal/     # Core library (FDR/FNR control, Venn-Abers)
+├── notebooks/             # Analysis notebooks organized by experiment
+│   ├── pfam/             # Pfam domain annotation (Figure 2)
+│   ├── scope/            # SCOPe structural classification
+│   ├── ec/               # EC number classification
+│   └── clean_selection/  # CLEAN enzyme experiments (Tables 1-2)
+├── scripts/              # CLI scripts and SLURM jobs
+├── data/                 # Data files (see GETTING_STARTED.md)
+├── results/              # Pre-computed thresholds and outputs
+└── docs/                 # Additional documentation
+```
 
 ## Quick Start
 
