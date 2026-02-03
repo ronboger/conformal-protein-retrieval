@@ -26,8 +26,8 @@ pip install -e .
 
 # 2. Download required data (see wget commands below)
 
-# 3. Search with your sequences
-cpr find --input your_sequences.fasta --output results.csv --fdr 0.1
+# 3. Search with your sequences (FASTA or embeddings)
+cpr search --input your_sequences.fasta --output results.csv --fdr 0.1
 ```
 
 ---
@@ -85,49 +85,39 @@ curl -L -o pfam_new_proteins.npy "https://zenodo.org/records/14272215/files/pfam
 
 ## CLI Commands
 
-### `cpr find` - One-Step Search (Recommended)
+### `cpr search` - Search with Conformal Guarantees
 
-The easiest way: FASTA in → annotated results out.
+The main command for protein search. Accepts both FASTA files and pre-computed embeddings:
 
 ```bash
-cpr find --input proteins.fasta --output results.csv --fdr 0.1
+# From FASTA (embeds automatically using Protein-Vec)
+cpr search --input proteins.fasta --output results.csv --fdr 0.1
+
+# From pre-computed embeddings
+cpr search --input embeddings.npy --output results.csv --fdr 0.1
 ```
 
-This single command:
-1. Embeds your sequences using Protein-Vec
-2. Searches the UniProt database (540K proteins)
-3. Filters to confident hits at your specified FDR
-4. Adds calibrated probability estimates
-5. Includes Pfam/functional annotations
+When given a FASTA file, `cpr search` will:
+1. Embed your sequences using Protein-Vec (or CLEAN with `--model clean`)
+2. Search the UniProt database (540K proteins)
+3. Filter to confident hits at your specified FDR
+4. Add calibrated probability estimates
+5. Include Pfam/functional annotations
 
-### `cpr search` - Search with Pre-computed Embeddings
-
-For when you already have embeddings (.npy files):
+**More examples:**
 
 ```bash
-# Basic search with FDR control
-cpr search --query my_embeddings.npy \
-           --database data/lookup_embeddings.npy \
-           --output results.csv \
-           --fdr 0.1
-
 # With FNR control instead (control false negatives)
-cpr search --query my_embeddings.npy \
-           --database data/lookup_embeddings.npy \
-           --output results.csv \
-           --fnr 0.1
+cpr search --input proteins.fasta --output results.csv --fnr 0.1
 
 # With a specific threshold you've computed
-cpr search --query my_embeddings.npy \
-           --database data/lookup_embeddings.npy \
-           --output results.csv \
-           --threshold 0.999980
+cpr search --input proteins.fasta --output results.csv --threshold 0.999980
+
+# Use CLEAN model for enzyme classification
+cpr search --input enzymes.fasta --output results.csv --model clean --fdr 0.1
 
 # Exploratory: get all neighbors without filtering
-cpr search --query my_embeddings.npy \
-           --database data/lookup_embeddings.npy \
-           --output results.csv \
-           --no-filter
+cpr search --input proteins.fasta --output results.csv --no-filter
 ```
 
 **Threshold options** (mutually exclusive):
@@ -198,8 +188,8 @@ pip install fair-esm
 # Generate CLEAN embeddings (128-dim)
 cpr embed --input enzymes.fasta --output clean_embeddings.npy --model clean
 
-# One-step search with CLEAN
-cpr find --input enzymes.fasta --output enzyme_results.csv --model clean --fdr 0.1
+# Search with CLEAN
+cpr search --input enzymes.fasta --output enzyme_results.csv --model clean --fdr 0.1
 ```
 
 ### Verify CLEAN Results (Paper Tables 1-2)
