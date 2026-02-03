@@ -25,11 +25,12 @@ print()
 
 # Check for overlap (potential leakage)
 print("Checking for overlap between datasets...")
-pfam_metas = set(d['meta'] for d in pfam_new)
-backup_metas = set(d['meta'] for d in backup_data)
+# Meta is an array, so convert to tuple for hashing
+pfam_metas = set(tuple(d['meta'].tolist()) if hasattr(d['meta'], 'tolist') else (d['meta'],) for d in pfam_new)
+backup_metas = set(tuple(d['meta'].tolist()) if hasattr(d['meta'], 'tolist') else (d['meta'],) for d in backup_data)
 overlap = pfam_metas & backup_metas
-print(f"  Unique in pfam_new: {len(pfam_metas)}")
-print(f"  Unique in backup: {len(backup_metas)}")
+print(f"  Unique query sets in pfam_new: {len(pfam_metas)}")
+print(f"  Unique query sets in backup: {len(backup_metas)}")
 print(f"  Overlap: {len(overlap)} ({len(overlap)/len(pfam_metas)*100:.1f}% of pfam_new)")
 print()
 
