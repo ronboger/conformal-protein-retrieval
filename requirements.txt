@@ -4,6 +4,7 @@ torch>=2.0.0
 gradio>=3.50.0
 biopython>=1.81
 transformers>=4.30.0
+fair-esm>=2.0.0  # Required for CLEAN embedding (ESM-1b)
 requests>=2.27.1
 pandas>=2.0.0
 scipy>=1.10.0

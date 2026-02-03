@@ -197,3 +197,19 @@ data/protein_vec_models.gz
 _large_artifacts/
 *.pdf
 LOCAL_NOTES.md
+
+# Build artifacts and caches
+.apptainer_cache/
+*.sif
+logs/
+test_clean_output/
+
+# Claude Code session files
+.claude/
+
+# Large model files (download separately)
+protein_vec_models.gz
+CLEAN_repo/
+
+# Archived legacy notebooks (moved from root dirs)
+notebooks_archive/

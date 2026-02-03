@@ -1,1 +1,0 @@
-For using retrieval-conditioned conformal prediction on the CLEAN model, we assume you have followed the steps to install the CLEAN package (link github repo). From there, after loading the pre-trained models and datasets, copy the `data/` directory into the `clean_selection` folder and all methods should run off the fly. 
