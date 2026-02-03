@@ -1,8 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=test_clean_embed
-#SBATCH --partition=savio4_gpu
-#SBATCH --account=co_doudna
-#SBATCH --qos=doudna_gpu4_normal
+#SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4

@@ -205,12 +205,18 @@ def test_search_with_threshold(tmp_path):
     assert result.returncode == 0
     assert output_file.exists()
 
-    df = pd.read_csv(output_file)
-    # With high threshold, we should have fewer results
-    assert len(df) <= 3 * 10  # At most 3 queries * 10 neighbors
-    # All results should be above threshold
-    if len(df) > 0:
-        assert df['similarity'].min() >= 0.9
+    # With high threshold on random embeddings, file may be empty or have few results
+    # Random unit vectors have expected cosine similarity ~0, so 0.9 threshold filters most
+    try:
+        df = pd.read_csv(output_file)
+        # With high threshold, we should have fewer results
+        assert len(df) <= 3 * 10  # At most 3 queries * 10 neighbors
+        # All results should be above threshold
+        if len(df) > 0:
+            assert df['similarity'].min() >= 0.9
+    except pd.errors.EmptyDataError:
+        # Empty file is valid - no results passed threshold
+        pass
 
 
 def test_search_with_metadata(tmp_path):
@@ -263,15 +269,18 @@ def test_prob_with_mock_data(tmp_path):
     """Test prob command with mock calibration data and scores."""
     np.random.seed(42)
 
-    # Create mock calibration data (structured like pfam_new_proteins.npy)
-    # Each sample should have similarity scores and labels
+    # Create mock calibration data (format: array of dicts with S_i, exact, partial)
     n_calib = 50
     cal_data = []
     for i in range(n_calib):
-        # Each sample: (query_emb, lookup_emb, sims, labels, metadata...)
         sims = np.random.uniform(0.998, 0.9999, size=10).astype(np.float32)
-        labels = (np.random.random(10) < 0.2).astype(np.int32)
-        cal_data.append((None, None, sims, labels, 'mock_protein'))
+        exact_labels = (np.random.random(10) < 0.2).astype(bool)
+        partial_labels = exact_labels | (np.random.random(10) < 0.1)
+        cal_data.append({
+            "S_i": sims,
+            "exact": exact_labels,
+            "partial": partial_labels,
+        })
 
     cal_file = tmp_path / "calibration.npy"
     np.save(cal_file, np.array(cal_data, dtype=object))
@@ -314,13 +323,18 @@ def test_prob_with_csv_input(tmp_path):
     """Test prob command with CSV input (e.g., from search results)."""
     np.random.seed(42)
 
-    # Create mock calibration data
+    # Create mock calibration data (format: array of dicts with S_i, exact, partial)
     n_calib = 30
     cal_data = []
     for i in range(n_calib):
         sims = np.random.uniform(0.998, 0.9999, size=5).astype(np.float32)
-        labels = (np.random.random(5) < 0.2).astype(np.int32)
-        cal_data.append((None, None, sims, labels, 'mock'))
+        exact_labels = (np.random.random(5) < 0.2).astype(bool)
+        partial_labels = exact_labels | (np.random.random(5) < 0.1)
+        cal_data.append({
+            "S_i": sims,
+            "exact": exact_labels,
+            "partial": partial_labels,
+        })
 
     cal_file = tmp_path / "calibration.npy"
     np.save(cal_file, np.array(cal_data, dtype=object))
@@ -366,14 +380,19 @@ def test_calibrate_with_mock_data(tmp_path):
     """Test calibrate command with mock calibration data."""
     np.random.seed(42)
 
-    # Create mock calibration data with similarity/label pairs
+    # Create mock calibration data (format: array of dicts with S_i, exact, partial)
     n_samples = 100
     cal_data = []
     for i in range(n_samples):
         sims = np.random.uniform(0.997, 0.9999, size=10).astype(np.float32)
         # Create labels: higher similarity -> higher chance of being positive
-        labels = (sims > 0.9995).astype(np.int32)
-        cal_data.append((None, None, sims, labels, f'protein_{i}'))
+        exact_labels = (sims > 0.9995).astype(bool)
+        partial_labels = (sims > 0.999).astype(bool)
+        cal_data.append({
+            "S_i": sims,
+            "exact": exact_labels,
+            "partial": partial_labels,
+        })
 
     cal_file = tmp_path / "calibration.npy"
     np.save(cal_file, np.array(cal_data, dtype=object))
