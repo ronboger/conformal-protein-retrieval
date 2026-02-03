@@ -111,48 +111,95 @@ def _embed_protein_vec(sequences, device, args):
 def _embed_clean(sequences, device, args):
     """Embed using CLEAN model (for enzyme classification).
 
+    CLEAN uses ESM-1b embeddings (1280-dim) passed through a LayerNormNet (128-dim).
     Requires CLEAN package: https://github.com/tttianhao/CLEAN
     """
     import numpy as np
+    import torch
 
     try:
-        from CLEAN.utils import get_ec_id_dict
         from CLEAN.model import LayerNormNet
-        import torch
     except ImportError:
         print("Error: CLEAN package not installed.")
         print("Install from: https://github.com/tttianhao/CLEAN")
-        print("  git clone https://github.com/tttianhao/CLEAN.git")
-        print("  cd CLEAN && python setup.py install")
+        print("  cd CLEAN_repo/app && python build.py install")
         sys.exit(1)
 
-    # Load CLEAN model
-    model_file = args.clean_model or "split100"
-    print(f"Loading CLEAN model: {model_file}")
+    # Find CLEAN pretrained weights
+    repo_root = Path(__file__).parent.parent
+    clean_data_dir = repo_root / "CLEAN_repo" / "app" / "data" / "pretrained"
+    model_file = args.clean_model if hasattr(args, 'clean_model') and args.clean_model else "split100"
 
+    model_path = clean_data_dir / f"{model_file}.pth"
+    if not model_path.exists():
+        # Try alternate location
+        model_path = Path(f"./data/pretrained/{model_file}.pth")
+
+    if not model_path.exists():
+        print(f"Error: CLEAN model weights not found at {model_path}")
+        print("Download pretrained weights from the CLEAN repository:")
+        print("  https://drive.google.com/file/d/1kwYd4VtzYuMvJMWXy6Vks91DSUAOcKpZ/view")
+        sys.exit(1)
+
+    # Load CLEAN model (512 hidden, 128 output)
+    print(f"Loading CLEAN model: {model_file}")
     dtype = torch.float32
     model = LayerNormNet(512, 128, device, dtype)
-
-    try:
-        checkpoint = torch.load(f'./data/pretrained/{model_file}.pth', map_location=device)
-        model.load_state_dict(checkpoint)
-    except FileNotFoundError:
-        print(f"Error: CLEAN model weights not found at ./data/pretrained/{model_file}.pth")
-        print("Download pretrained weights from the CLEAN repository.")
-        sys.exit(1)
-
+    checkpoint = torch.load(str(model_path), map_location=device)
+    model.load_state_dict(checkpoint)
     model.eval()
 
-    # CLEAN uses ESM embeddings as input
-    print("Computing ESM embeddings for CLEAN...")
-    esm_embeddings = _embed_esm(sequences, device, args)
+    # Step 1: Compute ESM-1b embeddings
+    print("Loading ESM-1b model for CLEAN...")
+    try:
+        import esm
+    except ImportError:
+        print("Error: fair-esm package not installed.")
+        print("Install with: pip install fair-esm")
+        sys.exit(1)
 
-    # Pass through CLEAN model
+    esm_model, alphabet = esm.pretrained.esm1b_t33_650M_UR50S()
+    esm_model = esm_model.to(device).eval()
+    batch_converter = alphabet.get_batch_converter()
+
+    # Process sequences in batches
+    print("Computing ESM-1b embeddings...")
+    esm_embeddings = []
+    batch_size = 4  # Adjust based on GPU memory
+    truncation_length = 1022  # ESM-1b max length
+
+    for i in range(0, len(sequences), batch_size):
+        batch_seqs = sequences[i:i + batch_size]
+        # Prepare batch data: list of (label, sequence) tuples
+        batch_data = [(f"seq_{j}", seq[:truncation_length]) for j, seq in enumerate(batch_seqs)]
+
+        batch_labels, batch_strs, batch_tokens = batch_converter(batch_data)
+        batch_tokens = batch_tokens.to(device)
+
+        with torch.no_grad():
+            results = esm_model(batch_tokens, repr_layers=[33], return_contacts=False)
+            token_representations = results["representations"][33]
+
+            # Mean pool over sequence length (excluding special tokens)
+            for j, seq in enumerate(batch_strs):
+                seq_len = min(len(seq), truncation_length)
+                # Tokens: [CLS] seq [EOS], so take tokens 1:seq_len+1
+                emb = token_representations[j, 1:seq_len + 1].mean(0)
+                esm_embeddings.append(emb.cpu())
+
+        if (i + batch_size) % 20 == 0 or i + batch_size >= len(sequences):
+            print(f"  ESM embeddings: {min(i + batch_size, len(sequences))}/{len(sequences)}")
+
+    # Stack ESM embeddings
+    esm_tensor = torch.stack(esm_embeddings).to(device=device, dtype=dtype)
+    print(f"ESM embeddings shape: {esm_tensor.shape}")
+
+    # Step 2: Pass through CLEAN model
     print("Computing CLEAN embeddings...")
     with torch.no_grad():
-        esm_tensor = torch.tensor(esm_embeddings, dtype=dtype, device=device)
         clean_embeddings = model(esm_tensor).cpu().numpy()
 
+    print(f"CLEAN embeddings shape: {clean_embeddings.shape}")
     return clean_embeddings
 
 
