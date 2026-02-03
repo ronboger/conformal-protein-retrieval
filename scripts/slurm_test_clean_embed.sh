@@ -25,7 +25,7 @@ echo "Job ID: $SLURM_JOB_ID"
 mkdir -p logs
 
 # Activate conda environment
-source ~/.bashrc
+eval "$(/shared/software/miniconda3/latest/bin/conda shell.bash hook)"
 conda activate conformal-s
 
 # Print environment info
