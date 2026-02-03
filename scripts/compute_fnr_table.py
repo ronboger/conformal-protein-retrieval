@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 """
-Compute FDR thresholds at standard alpha levels for the lookup table.
+Compute FNR thresholds at standard alpha levels for the lookup table.
 
-This script uses the Learn-then-Test (LTT) calibration from the paper to compute
-FDR-controlling thresholds at multiple alpha levels. Results are saved to a CSV
-that users can reference for their own experiments.
+This script computes False Negative Rate (FNR) controlling thresholds using
+conformal risk control. FNR thresholds ensure that the fraction of true
+positives missed is controlled at level alpha.
 
 The thresholds are computed by:
 1. Sampling calibration data multiple times (n_trials)
-2. Computing the FDR threshold for each trial using LTT
+2. Computing the FNR threshold for each trial
 3. Averaging across trials to get a stable estimate
 
 Note on reproducibility:
@@ -17,7 +17,8 @@ Note on reproducibility:
 - For exact reproduction, use the same random seed
 
 Usage:
-    python scripts/compute_fdr_table.py --calibration data/pfam_new_proteins.npy
+    python scripts/compute_fnr_table.py --calibration data/pfam_new_proteins.npy
+    python scripts/compute_fnr_table.py --calibration data/pfam_new_proteins.npy --partial
 """
 
 import argparse
@@ -30,26 +31,31 @@ import pandas as pd
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from protein_conformal.util import get_thresh_FDR, get_sims_labels
+from protein_conformal.util import get_thresh_new, get_sims_labels
 
 
-def compute_fdr_threshold(cal_data, alpha: float, n_trials: int = 100,
+def compute_fnr_threshold(cal_data, alpha: float, n_trials: int = 100,
                           n_calib: int = 1000, seed: int = None,
                           partial: bool = False) -> dict:
     """
-    Compute FDR threshold at a given alpha level.
+    Compute FNR threshold at a given alpha level.
+
+    Parameters:
+        cal_data: Calibration data array
+        alpha: Target FNR level (e.g., 0.1 means at most 10% false negatives)
+        n_trials: Number of trials for averaging
+        n_calib: Number of calibration samples per trial
+        seed: Random seed for reproducibility
+        partial: If True, use partial matches (at least one Pfam domain matches)
 
     Returns dict with:
         - mean_threshold: Average threshold across trials
         - std_threshold: Standard deviation across trials
-        - mean_risk: Average empirical FDR across trials
-        - std_risk: Standard deviation of empirical FDR
     """
     if seed is not None:
         np.random.seed(seed)
 
     thresholds = []
-    risks = []
 
     for trial in range(n_trials):
         # Shuffle and sample calibration data
@@ -59,17 +65,14 @@ def compute_fdr_threshold(cal_data, alpha: float, n_trials: int = 100,
         # Get similarity scores and labels
         X_cal, y_cal = get_sims_labels(trial_data, partial=partial)
 
-        # Compute threshold
-        l_hat, risk = get_thresh_FDR(X_cal, y_cal, alpha=alpha)
+        # Compute FNR threshold
+        l_hat = get_thresh_new(X_cal, y_cal, alpha)
 
         thresholds.append(l_hat)
-        risks.append(risk)
 
     return {
         'mean_threshold': np.mean(thresholds),
         'std_threshold': np.std(thresholds),
-        'mean_risk': np.mean(risks),
-        'std_risk': np.std(risks),
         'min_threshold': np.min(thresholds),
         'max_threshold': np.max(thresholds),
     }
@@ -77,7 +80,7 @@ def compute_fdr_threshold(cal_data, alpha: float, n_trials: int = 100,
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Compute FDR thresholds at standard alpha levels'
+        description='Compute FNR thresholds at standard alpha levels'
     )
     parser.add_argument(
         '--calibration', '-c',
@@ -88,8 +91,8 @@ def main():
     parser.add_argument(
         '--output', '-o',
         type=Path,
-        default=Path('results/fdr_thresholds.csv'),
-        help='Output CSV file'
+        default=None,
+        help='Output CSV file (default: results/fnr_thresholds.csv or results/fnr_thresholds_partial.csv)'
     )
     parser.add_argument(
         '--n-trials',
@@ -117,15 +120,16 @@ def main():
 
     args = parser.parse_args()
 
-    # Update output path if partial and using default
-    if args.partial and args.output == Path('results/fdr_thresholds.csv'):
-        args.output = Path('results/fdr_thresholds_partial.csv')
+    # Set default output path based on partial flag
+    if args.output is None:
+        suffix = '_partial' if args.partial else ''
+        args.output = Path(f'results/fnr_thresholds{suffix}.csv')
 
     # Standard alpha levels that users commonly need
     alpha_levels = [0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2]
 
     match_type = "partial" if args.partial else "exact"
-    print(f"Computing FDR thresholds ({match_type} matches)")
+    print(f"Computing FNR thresholds ({match_type} matches)")
     print(f"Loading calibration data from {args.calibration}...")
     cal_data = np.load(args.calibration, allow_pickle=True)
     print(f"  Loaded {len(cal_data)} calibration samples")
@@ -144,7 +148,7 @@ def main():
         # Use different seed offset for each alpha to ensure independence
         trial_seed = args.seed + int(alpha * 10000)
 
-        stats = compute_fdr_threshold(
+        stats = compute_fnr_threshold(
             cal_data.copy(),  # Copy to avoid mutation
             alpha=alpha,
             n_trials=args.n_trials,
@@ -159,8 +163,7 @@ def main():
             'threshold_std': stats['std_threshold'],
             'threshold_min': stats['min_threshold'],
             'threshold_max': stats['max_threshold'],
-            'empirical_fdr_mean': stats['mean_risk'],
-            'empirical_fdr_std': stats['std_risk'],
+            'match_type': match_type,
         })
 
         print(f"λ = {stats['mean_threshold']:.10f} ± {stats['std_threshold']:.2e}")
@@ -170,12 +173,12 @@ def main():
 
     # Add human-readable notes
     print(f"\n{'='*70}")
-    print("FDR Threshold Lookup Table")
+    print(f"FNR Threshold Lookup Table ({match_type} matches)")
     print(f"{'='*70}")
-    print(f"{'Alpha':<8} {'Threshold (λ)':<20} {'Std Dev':<12} {'Empirical FDR':<15}")
+    print(f"{'Alpha':<8} {'Threshold (λ)':<20} {'Std Dev':<12}")
     print("-" * 70)
     for _, row in df.iterrows():
-        print(f"{row['alpha']:<8.3f} {row['threshold_mean']:<20.12f} {row['threshold_std']:<12.2e} {row['empirical_fdr_mean']:<15.4f}")
+        print(f"{row['alpha']:<8.3f} {row['threshold_mean']:<20.12f} {row['threshold_std']:<12.2e}")
     print(f"{'='*70}")
 
     # Save to CSV
@@ -184,8 +187,7 @@ def main():
     print(f"\nSaved to {args.output}")
 
     # Also save a simple version for easy lookup
-    suffix = '_partial' if args.partial else ''
-    simple_output = args.output.parent / f'fdr_thresholds{suffix}_simple.csv'
+    simple_output = args.output.parent / f'fnr_thresholds{"_partial" if args.partial else ""}_simple.csv'
     df[['alpha', 'threshold_mean']].rename(
         columns={'threshold_mean': 'lambda_threshold'}
     ).to_csv(simple_output, index=False)
