@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --time=04:00:00
+#SBATCH --time=24:00:00
 #SBATCH --output=/groups/doudna/projects/ronb/conformal-protein-retrieval/logs/fdr_thresholds_%j.log
 #SBATCH --error=/groups/doudna/projects/ronb/conformal-protein-retrieval/logs/fdr_thresholds_%j.err
 
@@ -28,12 +28,26 @@ echo "Start time: $(date)"
 echo "Node: $(hostname)"
 echo ""
 
+# Exact match FDR
+echo "=== Computing EXACT match FDR thresholds ==="
 python scripts/compute_fdr_table.py \
     --calibration data/pfam_new_proteins.npy \
     --output results/fdr_thresholds.csv \
-    --n-trials 10 \
+    --n-trials 100 \
     --n-calib 1000 \
     --seed 42
+
+echo ""
+
+# Partial match FDR
+echo "=== Computing PARTIAL match FDR thresholds ==="
+python scripts/compute_fdr_table.py \
+    --calibration data/pfam_new_proteins.npy \
+    --output results/fdr_thresholds_partial.csv \
+    --n-trials 100 \
+    --n-calib 1000 \
+    --seed 42 \
+    --partial
 
 echo ""
 echo "============================================"

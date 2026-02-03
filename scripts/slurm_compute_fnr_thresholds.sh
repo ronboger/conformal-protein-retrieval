@@ -27,21 +27,23 @@ echo "Start time: $(date)"
 echo "Node: $(hostname)"
 echo ""
 
-# Compute exact match FNR thresholds
+# Exact match FNR
 echo "=== Computing EXACT match FNR thresholds ==="
 python scripts/compute_fnr_table.py \
     --calibration data/pfam_new_proteins.npy \
     --output results/fnr_thresholds.csv \
-    --n-trials 10 \
+    --n-trials 100 \
     --n-calib 1000 \
     --seed 42
 
 echo ""
+
+# Partial match FNR
 echo "=== Computing PARTIAL match FNR thresholds ==="
 python scripts/compute_fnr_table.py \
     --calibration data/pfam_new_proteins.npy \
     --output results/fnr_thresholds_partial.csv \
-    --n-trials 10 \
+    --n-trials 100 \
     --n-calib 1000 \
     --seed 42 \
     --partial

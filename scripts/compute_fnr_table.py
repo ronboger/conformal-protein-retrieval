@@ -97,8 +97,8 @@ def main():
     parser.add_argument(
         '--n-trials',
         type=int,
-        default=10,
-        help='Number of calibration trials (default: 10)'
+        default=100,
+        help='Number of calibration trials (default: 100)'
     )
     parser.add_argument(
         '--n-calib',
