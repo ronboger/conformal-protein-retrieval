@@ -246,6 +246,9 @@ def cmd_search(args):
         for j in range(args.k):
             sim = D[i, j]
             idx = I[i, j]
+            # Skip placeholder results (FAISS returns -1 for non-existent neighbors)
+            if idx < 0:
+                continue
             if args.threshold and sim < args.threshold:
                 continue
             row = {
