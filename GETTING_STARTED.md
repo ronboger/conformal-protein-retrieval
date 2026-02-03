@@ -153,12 +153,14 @@ These thresholds control the trade-off between hits and false positives:
 
 | α Level | FDR Threshold (λ) | FNR Threshold (λ) | Use Case |
 |---------|-------------------|-------------------|----------|
-| 0.001 | ~0.999995 | ~0.99979 | Ultra-stringent |
-| 0.01 | ~0.999992 | ~0.99984 | Very stringent |
-| 0.05 | ~0.999987 | ~0.99988 | Stringent |
-| **0.1** | **0.999980** | **~0.99990** | **Paper default** |
-| 0.15 | ~0.999975 | ~0.99991 | Relaxed |
-| 0.2 | ~0.999970 | ~0.99992 | Discovery-focused |
+| 0.001 | (see csv) | 0.9997904 | Ultra-stringent |
+| 0.01 | (see csv) | 0.9998495 | Very stringent |
+| 0.05 | (see csv) | 0.9998899 | Stringent |
+| **0.1** | **0.9999802** | **0.9999076** | **Paper default** |
+| 0.15 | (see csv) | 0.9999174 | Relaxed |
+| 0.2 | (see csv) | 0.9999245 | Discovery-focused |
+
+**Note**: FDR threshold at α=0.1 is the paper-verified value. Other FDR values require running `scripts/compute_fdr_table.py`.
 
 Full computed tables in `results/fdr_thresholds.csv` and `results/fnr_thresholds.csv`.
 
