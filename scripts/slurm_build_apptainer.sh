@@ -31,9 +31,8 @@ echo "Temp dir: $APPTAINER_TMPDIR"
 echo ""
 
 # Build the container
-# Use --no-mount to disable automatic bind mounts during build
-# This prevents "destination doesn't exist" errors from system-configured mounts
-apptainer build --fakeroot --no-mount home,tmp cpr.sif apptainer.def
+# The %setup section in apptainer.def creates mount points before container init
+apptainer build --fakeroot cpr.sif apptainer.def
 
 BUILD_STATUS=$?
 
