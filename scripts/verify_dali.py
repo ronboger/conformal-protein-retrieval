@@ -22,7 +22,8 @@ def main():
     print()
 
     # Load DALI results
-    dali_csv = Path("/groups/doudna/projects/ronb/conformal_backup/protein-conformal/data/dali_results_protein_vec_lam.csv")
+    repo_root = Path(__file__).parent.parent
+    dali_csv = repo_root / "results" / "dali_thresholds.csv"
 
     if not dali_csv.exists():
         print(f"ERROR: DALI results not found at {dali_csv}")
