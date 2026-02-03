@@ -15,6 +15,26 @@
 - If you need to limit output, use command-specific flags (e.g., `git log -n 10` instead of `git log | head -10`)
 - Avoid chained pipes that can cause output to buffer indefinitely
 
+### IMPORTANT: Use $HOME2 for storage, not $HOME
+
+- `$HOME` (/home/ronb) has limited quota - do NOT use for large files or caches
+- `$HOME2` (/groups/doudna/projects/ronb/) has 2 PB of storage - use for everything
+- For Apptainer/Docker cache: `export APPTAINER_CACHEDIR=$HOME2/.apptainer_cache`
+- For pip cache: `export PIP_CACHE_DIR=$HOME2/.pip_cache`
+- For conda envs: use `$HOME2/miniconda3` or shared conda at `/shared/software/miniconda3/latest`
+- For temporary build files: use `$HOME2/tmp` or project directories
+- NEVER create caches or large files in `$HOME` - builds will fail with disk quota errors
+
+### IMPORTANT: Use SLURM for GPU or heavy CPU tasks
+
+- NEVER run GPU-requiring code on login nodes - always submit to SLURM
+- NEVER run CPU-intensive builds (Apptainer, large pip installs) on login nodes
+- Available partitions: `standard` (CPU), `gpu` (GPU), `memory` (high-mem)
+- For GPU jobs: `#SBATCH --partition=gpu`
+- For CPU builds: `#SBATCH --partition=standard`
+- Example SLURM scripts in `scripts/slurm_*.sh`
+- Always use `eval "$(/shared/software/miniconda3/latest/bin/conda shell.bash hook)"` for conda in SLURM jobs
+
 ---
 
 ## Project-Specific Guidelines

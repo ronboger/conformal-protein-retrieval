@@ -37,6 +37,7 @@ dependencies = [
     "faiss-cpu>=1.7.4",
     "torch>=2.0.0",
     "transformers>=4.30.0",
+    "fair-esm>=2.0.0",  # Required for CLEAN embedding (ESM-1b)
 ]
 
 [project.optional-dependencies]
