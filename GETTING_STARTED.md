@@ -1,8 +1,22 @@
 # Getting Started with CPR
 
-This guide will get you from zero to running protein searches with conformal guarantees in under 10 minutes.
+This guide will get you from zero to running protein searches with conformal guarantees.
 
-## TL;DR (Easiest Path)
+## Statistical Guarantees
+
+CPR provides rigorous statistical guarantees based on conformal prediction:
+
+| Guarantee | Meaning | How to Use |
+|-----------|---------|------------|
+| **Expected Marginal FDR ≤ α** | On average, at most α fraction of your hits are false positives | Use `--fdr 0.1` for 10% expected FDR |
+| **FNR Control** | Controls the expected fraction of true matches you miss | Use `--fnr 0.1` to miss ≤10% of true hits |
+| **Calibrated Probabilities** | Venn-Abers calibration provides valid probability estimates | Output includes `probability` column |
+
+**Key insight**: Unlike p-values or arbitrary thresholds, our FDR guarantees are *marginal* guarantees that hold across all queries in expectation. See the [paper](https://doi.org/10.1038/s41467-024-55676-y) for theoretical details.
+
+---
+
+## Quick Start
 
 ```bash
 # 1. Clone and install
@@ -10,28 +24,10 @@ git clone https://github.com/ronboger/conformal-protein-retrieval.git
 cd conformal-protein-retrieval
 pip install -e .
 
-# 2. Download data (4GB total) from https://zenodo.org/records/14272215:
-#    → lookup_embeddings.npy (1.1 GB) → data/
-#    → lookup_embeddings_meta_data.tsv (535 MB) → data/
-#    → pfam_new_proteins.npy (2.4 GB) → data/
+# 2. Download required data (see wget commands below)
 
-# 3. Get Protein-Vec model weights (contact authors or see below)
-#    → Extract protein_vec_models.gz to protein_vec_models/
-
-# 4. Run search on your sequences (ONE COMMAND!)
+# 3. Search with your sequences
 cpr find --input your_sequences.fasta --output results.csv --fdr 0.1
-
-# That's it! results.csv contains:
-#   - Functional annotations for each protein
-#   - Calibrated probabilities
-#   - Uncertainty estimates
-```
-
-### Don't have model weights? Use pre-computed embeddings:
-
-```bash
-# If you already have embeddings (.npy), skip to search:
-cpr search --query your_embeddings.npy --output results.csv --fdr 0.1
 ```
 
 ---
@@ -39,8 +35,6 @@ cpr search --query your_embeddings.npy --output results.csv --fdr 0.1
 ## What You Need
 
 ### Already Included (GitHub clone)
-
-When you clone the repository, you automatically get:
 
 | File | Size | Description |
 |------|------|-------------|
@@ -51,15 +45,33 @@ When you clone the repository, you automatically get:
 
 ### Download from Zenodo (Required)
 
-Download these from **https://zenodo.org/records/14272215**:
+**Zenodo URL**: https://zenodo.org/records/14272215
 
-| File | Size | What it is | Where to put it |
-|------|------|------------|-----------------|
-| `lookup_embeddings.npy` | **1.1 GB** | UniProt database (540K protein embeddings) | `data/` |
-| `lookup_embeddings_meta_data.tsv` | **535 MB** | Protein metadata (names, Pfam domains, etc.) | `data/` |
-| `pfam_new_proteins.npy` | **2.4 GB** | Calibration data for FDR/probability computation | `data/` |
+```bash
+# Download all required files with wget
+cd data/
 
-**Total download: ~4 GB**
+# Database embeddings (1.1 GB) - 540K UniProt protein embeddings
+wget "https://zenodo.org/records/14272215/files/lookup_embeddings.npy?download=1" -O lookup_embeddings.npy
+
+# Database metadata (535 MB) - protein names, Pfam domains, etc.
+wget "https://zenodo.org/records/14272215/files/lookup_embeddings_meta_data.tsv?download=1" -O lookup_embeddings_meta_data.tsv
+
+# Calibration data (2.4 GB) - Pfam data for FDR/probability computation
+wget "https://zenodo.org/records/14272215/files/pfam_new_proteins.npy?download=1" -O pfam_new_proteins.npy
+
+# Verify downloads
+ls -lh lookup_embeddings.npy lookup_embeddings_meta_data.tsv pfam_new_proteins.npy
+# Expected: 1.1G, 535M, 2.4G
+```
+
+Or with curl:
+```bash
+cd data/
+curl -L -o lookup_embeddings.npy "https://zenodo.org/records/14272215/files/lookup_embeddings.npy?download=1"
+curl -L -o lookup_embeddings_meta_data.tsv "https://zenodo.org/records/14272215/files/lookup_embeddings_meta_data.tsv?download=1"
+curl -L -o pfam_new_proteins.npy "https://zenodo.org/records/14272215/files/pfam_new_proteins.npy?download=1"
+```
 
 ### Optional Downloads
 
@@ -71,135 +83,141 @@ Download these from **https://zenodo.org/records/14272215**:
 
 ---
 
-## Step-by-Step Setup
+## CLI Commands
 
-### Step 1: Clone and Install
+### `cpr find` - One-Step Search (Recommended)
 
-```bash
-git clone https://github.com/ronboger/conformal-protein-retrieval.git
-cd conformal-protein-retrieval
-pip install -e .
-```
-
-**Verify installation:**
-```bash
-cpr --help
-# Should show: embed, search, prob, calibrate, verify commands
-```
-
-### Step 2: Download Data
-
-Go to **https://zenodo.org/records/14272215** and download:
-
-1. `lookup_embeddings.npy` (1.1 GB)
-2. `lookup_embeddings_meta_data.tsv` (535 MB)
-3. `pfam_new_proteins.npy` (2.4 GB)
-
-Move them to the `data/` directory:
+The easiest way: FASTA in → annotated results out.
 
 ```bash
-mv ~/Downloads/lookup_embeddings.npy data/
-mv ~/Downloads/lookup_embeddings_meta_data.tsv data/
-mv ~/Downloads/pfam_new_proteins.npy data/
-```
-
-**Verify files:**
-```bash
-ls -lh data/*.npy data/*.tsv
-# lookup_embeddings.npy         1.1G
-# lookup_embeddings_meta_data.tsv   535M
-# pfam_new_proteins.npy         2.4G
-```
-
-### Step 3: Verify Setup
-
-```bash
-cpr verify --check syn30
-```
-
-**Expected output:**
-```
-JCVI Syn3.0 Annotation Verification
-Total queries:     149
-Confident hits:    59    (might be 58-60, see docs/REPRODUCIBILITY.md)
-Hit rate:          39.6%
-FDR threshold:     λ = 0.999980225003
-✓ VERIFICATION PASSED
-```
-
----
-
-## Your First Search
-
-### Easiest: One Command from FASTA (Recommended)
-
-```bash
-cpr find --input your_proteins.fasta --output results.csv --fdr 0.1
+cpr find --input proteins.fasta --output results.csv --fdr 0.1
 ```
 
 This single command:
 1. Embeds your sequences using Protein-Vec
 2. Searches the UniProt database (540K proteins)
-3. Filters to confident hits at 10% FDR
+3. Filters to confident hits at your specified FDR
 4. Adds calibrated probability estimates
 5. Includes Pfam/functional annotations
 
-**Output columns:**
-- `query_name`: Your sequence ID from FASTA
-- `similarity`: Cosine similarity score
-- `probability`: Calibrated probability of functional match
-- `uncertainty`: Venn-Abers uncertainty interval
-- `match_*`: Pfam domains, protein names, etc.
+### `cpr search` - Search with Pre-computed Embeddings
 
-### Control FDR Level
+For when you already have embeddings (.npy files):
 
 ```bash
-# Stringent: 1% FDR (fewer but more confident hits)
-cpr find --input proteins.fasta --output results.csv --fdr 0.01
+# Basic search with FDR control
+cpr search --query my_embeddings.npy \
+           --database data/lookup_embeddings.npy \
+           --output results.csv \
+           --fdr 0.1
 
-# Default: 10% FDR (balanced)
-cpr find --input proteins.fasta --output results.csv --fdr 0.1
+# With FNR control instead (control false negatives)
+cpr search --query my_embeddings.npy \
+           --database data/lookup_embeddings.npy \
+           --output results.csv \
+           --fnr 0.1
 
-# Discovery: 20% FDR (more hits, some false positives)
-cpr find --input proteins.fasta --output results.csv --fdr 0.2
+# With a specific threshold you've computed
+cpr search --query my_embeddings.npy \
+           --database data/lookup_embeddings.npy \
+           --output results.csv \
+           --threshold 0.999980
+
+# Exploratory: get all neighbors without filtering
+cpr search --query my_embeddings.npy \
+           --database data/lookup_embeddings.npy \
+           --output results.csv \
+           --no-filter
 ```
 
-### Alternative: Manual Workflow (Advanced)
+**Threshold options** (mutually exclusive):
+- `--fdr ALPHA`: Look up threshold for target FDR level (e.g., `--fdr 0.1` for 10% FDR)
+- `--fnr ALPHA`: Look up threshold for target FNR level
+- `--threshold VALUE`: Use a specific similarity threshold you provide
+- `--no-filter`: Return all k nearest neighbors without filtering
 
-If you need more control or already have embeddings:
+### `cpr embed` - Generate Embeddings
+
+Convert FASTA sequences to embeddings:
 
 ```bash
-# Step 1: Embed (if starting from FASTA)
-cpr embed --input seqs.fasta --output embeddings.npy --model protein-vec
+# Using Protein-Vec (default, general-purpose)
+cpr embed --input proteins.fasta --output embeddings.npy --model protein-vec
 
-# Step 2: Search with FDR control
-cpr search --query embeddings.npy --output hits.csv --fdr 0.1
+# Using CLEAN (enzyme-specific)
+cpr embed --input enzymes.fasta --output embeddings.npy --model clean
+```
 
-# Step 3: Add probabilities (optional, for detailed analysis)
-cpr prob --input hits.csv --output hits_with_probs.csv
+### `cpr verify` - Verify Paper Results
+
+```bash
+cpr verify --check syn30    # Verify JCVI Syn3.0 result (39.6% annotation)
+cpr verify --check all      # Run all verification checks
 ```
 
 ---
 
-## FDR Threshold Reference
+## FDR/FNR Threshold Reference
 
-Use these thresholds for your desired false discovery rate:
+These thresholds control the trade-off between hits and false positives:
 
-| FDR Level | Threshold (λ) | Use Case |
-|-----------|---------------|----------|
-| 1% | 0.999990 | Very stringent |
-| 5% | 0.999985 | Stringent |
-| **10%** | **0.999980** | **Paper default** |
-| 15% | 0.999975 | Relaxed |
-| 20% | 0.999970 | Discovery-focused |
+| α Level | FDR Threshold (λ) | FNR Threshold (λ) | Use Case |
+|---------|-------------------|-------------------|----------|
+| 0.001 | ~0.999995 | ~0.99979 | Ultra-stringent |
+| 0.01 | ~0.999992 | ~0.99984 | Very stringent |
+| 0.05 | ~0.999987 | ~0.99988 | Stringent |
+| **0.1** | **0.999980** | **~0.99990** | **Paper default** |
+| 0.15 | ~0.999975 | ~0.99991 | Relaxed |
+| 0.2 | ~0.999970 | ~0.99992 | Discovery-focused |
 
-Full table in `results/fdr_thresholds.csv`.
+Full computed tables in `results/fdr_thresholds.csv` and `results/fnr_thresholds.csv`.
 
 ---
 
-## DALI Structural Prefiltering Thresholds
+## CLEAN Enzyme Classification
 
-For structural homology search (DALI + AFDB), we use z-score thresholds instead of similarity thresholds:
+For enzyme-specific searches with EC number predictions:
+
+### Setup
+
+```bash
+# 1. Clone CLEAN repository
+git clone https://github.com/tttianhao/CLEAN.git CLEAN_repo
+cd CLEAN_repo && pip install -e . && cd ..
+
+# 2. Install ESM dependency
+pip install fair-esm
+
+# 3. Download CLEAN weights (if not included)
+# Weights should be at: CLEAN_repo/app/data/pretrained/CLEAN_pretrained/
+```
+
+### Usage with CPR
+
+```bash
+# Generate CLEAN embeddings (128-dim)
+cpr embed --input enzymes.fasta --output clean_embeddings.npy --model clean
+
+# One-step search with CLEAN
+cpr find --input enzymes.fasta --output enzyme_results.csv --model clean --fdr 0.1
+```
+
+### Verify CLEAN Results (Paper Tables 1-2)
+
+```bash
+# Run CLEAN verification script
+python scripts/verify_clean.py
+
+# Expected output:
+# Mean test loss: 0.97 ± 0.XX
+# ✓ VERIFICATION PASSED - Risk controlled at α=1.0
+```
+
+---
+
+## DALI Structural Prefiltering
+
+For structural homology search (DALI + AFDB), we use z-score thresholds:
 
 | Metric | Value | Description |
 |--------|-------|-------------|
@@ -208,9 +226,79 @@ For structural homology search (DALI + AFDB), we use z-score thresholds instead 
 | FNR | 18.2% | False Negative Rate (miss rate) |
 | DB Reduction | 31.5% | Fraction of database filtered out |
 
-Pre-computed results are in `results/dali_thresholds.csv` (73 trials from paper experiments).
+Pre-computed results in `results/dali_thresholds.csv` (73 trials from paper experiments).
 
 **Usage**: When running DALI, filter candidates with z-score ≥ 5.1 to achieve ~82% TPR while reducing database size by ~31%.
+
+---
+
+## Legacy Scripts
+
+These scripts from the original paper analysis can be used for advanced workflows:
+
+### FDR/FNR Threshold Computation
+
+```bash
+# Compute FDR thresholds at custom alpha levels
+python scripts/compute_fdr_table.py \
+    --calibration data/pfam_new_proteins.npy \
+    --output results/my_fdr_thresholds.csv \
+    --n-trials 100 \
+    --alpha-levels 0.01,0.05,0.1,0.2
+
+# Compute FNR thresholds
+python scripts/compute_fnr_table.py \
+    --calibration data/pfam_new_proteins.npy \
+    --output results/my_fnr_thresholds.csv \
+    --n-trials 100
+
+# Use partial matches (at least one Pfam domain matches)
+python scripts/compute_fdr_table.py --partial ...
+```
+
+### Verification Scripts
+
+```bash
+# Verify JCVI Syn3.0 annotation (Paper Figure 2A)
+python scripts/verify_syn30.py
+
+# Verify DALI prefiltering (Paper Tables 4-6)
+python scripts/verify_dali.py
+
+# Verify CLEAN enzyme classification (Paper Tables 1-2)
+python scripts/verify_clean.py
+
+# Verify FDR algorithm correctness
+python scripts/verify_fdr_algorithm.py
+```
+
+### Probability Computation
+
+```bash
+# Precompute SVA probabilities for a database
+python scripts/precompute_SVA_probs.py \
+    --calibration data/pfam_new_proteins.npy \
+    --output data/sva_probabilities.csv
+
+# Get probabilities for search results
+python scripts/get_probs.py \
+    --input results.csv \
+    --calibration data/pfam_new_proteins.npy \
+    --output results_with_probs.csv
+```
+
+### Original Paper Scripts (in `scripts/pfam/`)
+
+```bash
+# Original FDR threshold generation (paper methodology)
+python scripts/pfam/generate_fdr.py
+
+# Original FNR threshold generation
+python scripts/pfam/generate_fnr.py
+
+# SVA reliability analysis
+python scripts/pfam/sva_results.py
+```
 
 ---
 
@@ -220,40 +308,15 @@ Pre-computed results are in `results/dali_thresholds.csv` (73 trials from paper 
 
 **Option 1: Contact authors** for the `protein_vec_models.gz` archive.
 
-**Option 2: Use pre-computed embeddings** from Zenodo (no weights needed for searching).
+**Option 2: Use pre-computed embeddings** from Zenodo (no weights needed).
 
 If you have the weights:
 ```bash
 tar -xzf protein_vec_models.gz
-# Creates protein_vec_models/ directory with:
+# Creates protein_vec_models/ with:
 #   protein_vec.ckpt (804 MB)
 #   protein_vec_params.json
 #   aspect_vec_*.ckpt (200-400 MB each)
-```
-
-### CLEAN (Enzyme Classification)
-
-For enzyme-specific searches, get CLEAN from: https://github.com/tttianhao/CLEAN
-
----
-
-## Directory Structure After Setup
-
-```
-conformal-protein-retrieval/
-├── data/
-│   ├── lookup_embeddings.npy          ← Download from Zenodo (1.1 GB)
-│   ├── lookup_embeddings_meta_data.tsv ← Download from Zenodo (535 MB)
-│   ├── pfam_new_proteins.npy          ← Download from Zenodo (2.4 GB)
-│   └── gene_unknown/                  ← Included in GitHub
-│       ├── unknown_aa_seqs.fasta
-│       └── unknown_aa_seqs.npy
-├── protein_vec_models/                ← Optional: for new embeddings
-│   ├── protein_vec.ckpt
-│   └── ...
-├── protein_conformal/                 ← Code (included)
-├── results/                           ← Your outputs go here
-└── scripts/                           ← Helper scripts
 ```
 
 ---
@@ -261,16 +324,34 @@ conformal-protein-retrieval/
 ## Troubleshooting
 
 ### "FileNotFoundError: data/lookup_embeddings.npy"
-→ Download from Zenodo: https://zenodo.org/records/14272215
+→ Download from Zenodo (see wget commands above)
 
 ### "ModuleNotFoundError: No module named 'faiss'"
-→ Install FAISS: `pip install faiss-cpu` (or `faiss-gpu` for GPU)
+→ Install FAISS: `pip install faiss-cpu` (or `conda install faiss-gpu` for GPU)
 
 ### "Got 58 hits, expected 59"
-→ This is expected! See `docs/REPRODUCIBILITY.md` - the result varies by ±1 due to threshold boundary effects.
+→ This is expected! See `docs/REPRODUCIBILITY.md` - varies by ±1 due to threshold boundary effects.
 
 ### "CUDA out of memory"
-→ Use CPU: `--device cpu` or reduce batch size with `--batch-size 16`
+→ Use CPU: `--cpu` flag or reduce batch size
+
+### "ModuleNotFoundError: No module named 'fair_esm'"
+→ For CLEAN embeddings: `pip install fair-esm`
+
+---
+
+## Output Columns
+
+Search results include:
+
+| Column | Description |
+|--------|-------------|
+| `query_name` | Your sequence ID from FASTA |
+| `similarity` | Cosine similarity score |
+| `probability` | Calibrated probability of functional match |
+| `uncertainty` | Venn-Abers uncertainty interval |
+| `match_name` | Matched protein name |
+| `match_pfam` | Pfam domain annotations |
 
 ---
 
@@ -283,7 +364,7 @@ conformal-protein-retrieval/
 
 ---
 
-## Summary: Files Checklist
+## Files Checklist
 
 | Source | Files | Size | Status |
 |--------|-------|------|--------|
