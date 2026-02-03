@@ -12,6 +12,7 @@
 #   sbatch scripts/slurm_verify.sh fdr     # Verify FDR algorithm
 #   sbatch scripts/slurm_verify.sh dali    # Verify DALI prefiltering (Tables 4-6)
 #   sbatch scripts/slurm_verify.sh clean   # Verify CLEAN enzyme (Tables 1-2)
+#   sbatch scripts/slurm_verify.sh probs   # Verify precomputed probability lookup
 #   sbatch scripts/slurm_verify.sh all     # Run all verifications
 
 set -e
@@ -55,6 +56,12 @@ run_clean() {
     echo ""
 }
 
+run_probs() {
+    echo "--- Precomputed Probability Lookup Verification ---"
+    python scripts/test_precomputed_probs.py
+    echo ""
+}
+
 case "$CHECK" in
     syn30)
         run_syn30
@@ -68,15 +75,19 @@ case "$CHECK" in
     clean)
         run_clean
         ;;
+    probs)
+        run_probs
+        ;;
     all)
         run_syn30
         run_fdr
         run_dali
         run_clean
+        run_probs
         ;;
     *)
         echo "Unknown check: $CHECK"
-        echo "Available: syn30, fdr, dali, clean, all"
+        echo "Available: syn30, fdr, dali, clean, probs, all"
         exit 1
         ;;
 esac

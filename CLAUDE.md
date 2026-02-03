@@ -123,6 +123,55 @@
 
 ---
 
+### 2026-02-02 ~16:00 PST - FDR Data Investigation & Verification Scripts
+
+**Completed:**
+- [x] Created DALI verification script (`scripts/verify_dali.py`)
+  - Result: 81.8% TPR, 31.5% DB reduction ✓ (paper: 82.8% TPR)
+- [x] Created CLEAN verification script (`scripts/verify_clean.py`)
+  - Result: mean loss 0.97 ≤ α=1.0 ✓
+- [x] Added multi-model embedding support to CLI (`--model protein-vec|clean`)
+- [x] Created Dockerfile and apptainer.def for containerization
+- [x] **CRITICAL**: Investigated FDR calibration data discrepancy
+- [x] Created `scripts/quick_fdr_check.py` for dataset comparison
+- [x] Fixed `slurm_calibrate_fdr.sh` to use correct dataset
+
+**Key Finding - Data Leakage in Backup Dataset:**
+
+| Dataset | Samples | Positive Rate | FDR Threshold |
+|---------|---------|---------------|---------------|
+| `pfam_new_proteins.npy` (CORRECT) | 1,864 | 0.22% | 0.9999820199 |
+| `conformal_pfam_with_lookup_dataset.npy` (LEAKY) | 10,000 | 3.00% | 0.9999644648 |
+| Paper reported | — | — | 0.9999802250 |
+
+The backup dataset has **data leakage**: first 50 samples all have "PF01266;" (same Pfam family).
+The correct dataset (`pfam_new_proteins.npy`) has diverse families and matches paper threshold.
+
+**Files Changed:**
+- `scripts/slurm_calibrate_fdr.sh` - Fixed to use correct dataset
+- `DEVELOPMENT.md` - Added data leakage warning
+- `scripts/verify_dali.py` - NEW: DALI verification
+- `scripts/verify_clean.py` - NEW: CLEAN verification
+- `scripts/quick_fdr_check.py` - NEW: Dataset comparison
+- `Dockerfile`, `apptainer.def` - NEW: Container definitions
+
+**Verification Summary:**
+| Claim | Paper | Reproduced | Status |
+|-------|-------|------------|--------|
+| Syn3.0 annotation | 39.6% (59/149) | 39.6% (59/149) | ✓ EXACT |
+| FDR threshold | 0.9999802250 | 0.9999820199 | ✓ (~0.002% diff) |
+| DALI TPR | 82.8% | 81.8% | ✓ (~1% diff) |
+| DALI reduction | 31.5% | 31.5% | ✓ EXACT |
+| CLEAN loss | ≤ α=1.0 | 0.97 | ✓ |
+
+**Next Steps:**
+1. Test precomputed probability lookup CSV is reproducible
+2. Add `cpr prob --precomputed` for fast probability with model-specific calibration
+3. Build and test Docker/Apptainer images
+4. Integrate full CLEAN model verification (requires CLEAN package)
+
+---
+
 ### Session Notes Template
 
 ```

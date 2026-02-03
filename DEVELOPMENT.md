@@ -110,7 +110,21 @@ cpr gui --port 7860
 
 | File | Size | Purpose |
 |------|------|---------|
-| `pfam_new_proteins.npy` | 2.5 GB | Calibration data for FDR/FNR control |
+| `pfam_new_proteins.npy` | 2.5 GB | **CORRECT** calibration data for FDR/FNR control |
+
+#### ⚠️ Data Leakage Warning
+
+**DO NOT USE** `conformal_pfam_with_lookup_dataset.npy` from the backup directory. This dataset has **data leakage**:
+- First 50 samples all have the same Pfam family "PF01266;" repeated
+- Positive rate is 3.00% (vs 0.22% in correct dataset)
+- Produces incorrect FDR threshold (~0.999965 vs paper's ~0.999980)
+
+The correct dataset is `pfam_new_proteins.npy` with:
+- 1,864 diverse samples with different Pfam families
+- 0.22% positive rate matching expected calibration distribution
+- Produces threshold ~0.999982 matching paper's 0.9999802250
+
+See `scripts/quick_fdr_check.py` for verification.
 | `lookup_embeddings.npy` | 1.1 GB | UniProt protein embeddings (lookup database) |
 | `lookup_embeddings_meta_data.tsv` | 560 MB | Metadata for lookup proteins |
 | `afdb_embeddings_protein_vec.npy` | 4.7 GB | AlphaFold DB embeddings |

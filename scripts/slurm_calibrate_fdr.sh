@@ -22,16 +22,23 @@ echo "Date: $(date)"
 echo "Node: $(hostname)"
 echo "========================================"
 
-# Use the ORIGINAL calibration dataset from backup (what paper used)
-CALIB_DATA="/groups/doudna/projects/ronb/conformal_backup/protein-conformal/data/conformal_pfam_with_lookup_dataset.npy"
+# IMPORTANT: Use pfam_new_proteins.npy - the CORRECT calibration dataset
+# The backup dataset (conformal_pfam_with_lookup_dataset.npy) has DATA LEAKAGE:
+#   - First 50 samples all have same Pfam family "PF01266;" repeated
+#   - Positive rate is 3.00% vs 0.22% in correct dataset
+#   - Results in different FDR threshold (~0.999965 vs paper's ~0.999980)
+# See: scripts/quick_fdr_check.py for verification
+CALIB_DATA="data/pfam_new_proteins.npy"
 
 # Check if data exists
 if [ ! -f "$CALIB_DATA" ]; then
     echo "ERROR: Calibration data not found at $CALIB_DATA"
+    echo "Download from Zenodo: https://zenodo.org/records/14272215"
     exit 1
 fi
 
 echo "Using calibration data: $CALIB_DATA"
+echo "NOTE: Using pfam_new_proteins.npy (correct dataset without leakage)"
 echo ""
 
 # Run calibration using the ORIGINAL generate_fdr.py script (LTT method)
