@@ -5,10 +5,15 @@ This document describes the data files needed to run CPR (Conformal Protein Retr
 ## Quick Start
 
 ```bash
-# 1. Download data from Zenodo
-# Visit: https://zenodo.org/records/14272215
+# 1. Download required data files
+cd data/
+wget "https://zenodo.org/records/14272215/files/lookup_embeddings.npy?download=1" -O lookup_embeddings.npy
+wget "https://zenodo.org/records/14272215/files/lookup_embeddings_meta_data.tsv?download=1" -O lookup_embeddings_meta_data.tsv
+wget "https://zenodo.org/records/14272215/files/pfam_new_proteins.npy?download=1" -O pfam_new_proteins.npy
+cd ..
 
-# 2. Extract Protein-Vec models (if not already done)
+# 2. Download and extract Protein-Vec model weights (for embedding new sequences)
+wget "https://zenodo.org/records/18478696/files/protein_vec_models.gz?download=1" -O protein_vec_models.gz
 tar -xzf protein_vec_models.gz
 
 # 3. Verify setup
@@ -37,9 +42,14 @@ Small files that ARE committed to git:
 | `data/gene_unknown/unknown_aa_seqs.npy` | 299 KB | Pre-computed embeddings for Syn3.0 genes |
 | `data/gene_unknown/jcvi_syn30_unknown_gene_hits.csv` | 61 KB | Results: 59 annotated genes |
 
-### Protein-Vec Models
+### Protein-Vec Models ([Zenodo #18478696](https://zenodo.org/records/18478696))
 
-Model weights (~3 GB compressed, ~3 GB extracted):
+Model weights (2.9 GB compressed):
+
+```bash
+wget "https://zenodo.org/records/18478696/files/protein_vec_models.gz?download=1" -O protein_vec_models.gz
+tar -xzf protein_vec_models.gz
+```
 
 | File | Size | Required For |
 |------|------|--------------|
@@ -47,8 +57,6 @@ Model weights (~3 GB compressed, ~3 GB extracted):
 | `protein_vec_params.json` | 240 B | Model configuration |
 | `aspect_vec_*.ckpt` | ~200-400 MB each | Aspect-specific models |
 | `tm_vec_swiss_model_large.ckpt` | 391 MB | TM-Vec model |
-
-**Source**: Contact authors or use the `protein_vec_models.gz` archive.
 
 ## Directory Structure
 

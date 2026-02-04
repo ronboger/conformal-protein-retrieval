@@ -73,13 +73,36 @@ curl -L -o lookup_embeddings_meta_data.tsv "https://zenodo.org/records/14272215/
 curl -L -o pfam_new_proteins.npy "https://zenodo.org/records/14272215/files/pfam_new_proteins.npy?download=1"
 ```
 
-### Optional Downloads
+### Protein-Vec Model Weights (Required for embedding new sequences)
+
+If you want to embed new FASTA sequences (not just use pre-computed embeddings), download the model weights:
+
+**Zenodo URL**: https://zenodo.org/records/18478696
+
+```bash
+# Download and extract Protein-Vec model weights (2.9 GB compressed)
+wget "https://zenodo.org/records/18478696/files/protein_vec_models.gz?download=1" -O protein_vec_models.gz
+
+# Extract to protein_vec_models/ directory
+tar -xzf protein_vec_models.gz
+
+# Verify extraction
+ls protein_vec_models/
+# Expected: protein_vec.ckpt, protein_vec_params.json, aspect_vec_*.ckpt, etc.
+```
+
+Or with curl:
+```bash
+curl -L -o protein_vec_models.gz "https://zenodo.org/records/18478696/files/protein_vec_models.gz?download=1"
+tar -xzf protein_vec_models.gz
+```
+
+### Other Optional Downloads
 
 | File | Size | When you need it |
 |------|------|------------------|
 | `afdb_embeddings_protein_vec.npy` | 4.7 GB | Searching AlphaFold Database |
-| Protein-Vec model weights | 3 GB | Computing new embeddings from FASTA |
-| CLEAN model weights | 1 GB | Enzyme classification with CLEAN |
+| CLEAN model weights | ~1 GB | Enzyme classification with CLEAN |
 
 ---
 
