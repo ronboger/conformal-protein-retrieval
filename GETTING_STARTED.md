@@ -241,31 +241,35 @@ For enzyme-specific searches with EC number predictions:
 ### Setup
 
 ```bash
-# 1. Clone CLEAN repository
+# 1. Clone CLEAN repository with pretrained weights
 git clone https://github.com/tttianhao/CLEAN.git CLEAN_repo
-cd CLEAN_repo && pip install -e . && cd ..
 
-# 2. Install ESM dependency
-pip install fair-esm
+# 2. Install CLEAN and dependencies
+cd CLEAN_repo
+pip install -e .
+pip install fair-esm>=2.0.0
+cd ..
 
-# 3. Download CLEAN weights (if not included)
-# Weights should be at: CLEAN_repo/app/data/pretrained/CLEAN_pretrained/
+# 3. Verify weights are present
+ls CLEAN_repo/app/data/pretrained/
+# Expected: 100.pt (123 MB), 70.pt (40 MB), split100.pth, split70.pth
 ```
+
+**Note**: CLEAN uses ESM-1b embeddings internally (computed automatically). The model produces 128-dimensional embeddings (vs 1024 for Protein-Vec).
 
 ### Usage with CPR
 
 ```bash
-# Generate CLEAN embeddings (128-dim)
+# Generate CLEAN embeddings (128-dim) - requires GPU
 cpr embed --input enzymes.fasta --output clean_embeddings.npy --model clean
 
-# Search with CLEAN
+# Search with CLEAN model
 cpr search --input enzymes.fasta --output enzyme_results.csv --model clean --fdr 0.1
 ```
 
 ### Verify CLEAN Results (Paper Tables 1-2)
 
 ```bash
-# Run CLEAN verification script
 python scripts/verify_clean.py
 
 # Expected output:
@@ -362,22 +366,59 @@ python scripts/pfam/sva_results.py
 
 ---
 
-## Model Weights
+## Docker / Container Usage
 
-### Protein-Vec (General Protein Search)
+Run CPR without installing dependencies locally:
 
-**Option 1: Contact authors** for the `protein_vec_models.gz` archive.
+### Docker
 
-**Option 2: Use pre-computed embeddings** from Zenodo (no weights needed).
-
-If you have the weights:
 ```bash
-tar -xzf protein_vec_models.gz
-# Creates protein_vec_models/ with:
-#   protein_vec.ckpt (804 MB)
-#   protein_vec_params.json
-#   aspect_vec_*.ckpt (200-400 MB each)
+# Build the image
+docker build -t cpr:latest .
+
+# Run with your data mounted
+docker run -it --rm \
+    -v $(pwd)/data:/workspace/data \
+    -v $(pwd)/protein_vec_models:/workspace/protein_vec_models \
+    -v $(pwd)/results:/workspace/results \
+    cpr:latest bash
+
+# Inside container: run searches
+cpr search --input data/your_sequences.fasta --output results/hits.csv --fdr 0.1
+
+# Or launch the Gradio web interface
+docker run -p 7860:7860 \
+    -v $(pwd)/data:/workspace/data \
+    cpr:latest
+# Then open http://localhost:7860
 ```
+
+### Docker Compose
+
+```bash
+# Start the Gradio web interface
+docker-compose up
+
+# Access at http://localhost:7860
+```
+
+### Apptainer (HPC clusters)
+
+```bash
+# Build the container
+apptainer build cpr.sif apptainer.def
+
+# Run a search
+apptainer exec --nv cpr.sif cpr search \
+    --input data/sequences.fasta \
+    --output results/hits.csv \
+    --fdr 0.1
+
+# Interactive shell
+apptainer shell --nv cpr.sif
+```
+
+**Note**: Use `--nv` flag for GPU support on NVIDIA systems.
 
 ---
 
