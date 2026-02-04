@@ -21,39 +21,16 @@ data/inputs/
 data/lookup_embeddings_meta_data.tsv
 exported_reports/
 inter_results/
-# Results: keep folder ignored by default, but include tiny CSVs needed by the app
-results/*
-!results/fdr_thresholds.csv
-!results/fnr_thresholds.csv
-!results/calibration_probs.csv
+results/
 saved_sessions/
 protein_vec_models/
 scripts/debug_data.py
 ignore/
 notes.md
 .gradio/
-scope/
-protein/
+/scope/
+/protein/
 protein_conformal/.gradio/
-data/*.ipynb
-clean_selection/
-ec/*.tsv
-
-# Additional catch-all patterns for HuggingFace
-*.npy
-*.pkl
-*.ckpt
-*.h5
-*.pth
-*.pt
-*.safetensors
-*.bin
-# Large notebooks (>10MB)
-pfam/*.ipynb
-afdb/*.ipynb
-# Temporary and session files
-temp_fnr_results/
-cpr_data/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -215,3 +192,27 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+_large_artifacts/
+data/protein_vec_models.gz
+_large_artifacts/
+*.pdf
+LOCAL_NOTES.md
+
+# Build artifacts and caches
+.apptainer_cache/
+*.sif
+logs/
+test_clean_output/
+
+# Claude Code session files
+.claude/
+
+# Large model files (download separately)
+protein_vec_models.gz
+CLEAN_repo/
+
+# Archived legacy code (redundant/one-off scripts)
+notebooks_archive/
+scripts/archive/
+notebooks/*/archive/
+docs/archive/

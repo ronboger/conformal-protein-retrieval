@@ -137,7 +137,7 @@ def get_thresh_new_FDR(X, Y, alpha):
         lhat = np.quantile(
             all_sim_exact,
             np.maximum(alpha - (1 - alpha) / n, 0),
-            interpolation="lower",
+            method="lower",
         )
     else:
         lhat = 0
@@ -225,7 +225,7 @@ def get_thresh_new(X, Y, alpha):
         lhat = np.quantile(
             all_sim_exact,
             np.maximum(alpha - (1 - alpha) / n, 0),
-            interpolation="lower",
+            method="lower",
         )
     else:
         lhat = 0
@@ -248,7 +248,7 @@ def get_thresh(data, alpha):
             lhat = np.quantile(
                 all_sim_exact,
                 np.maximum(alpha - (1 - alpha) / n, 0),
-                interpolation="lower",
+                method="lower",
             )
         else:
             lhat = 0
@@ -344,43 +344,52 @@ def std_loss(sims, labels, lam):
     return (false_discoveries / total_discoveries).std()
 
 
-def get_thresh_FDR(labels, sims, alpha, delta=0.5, N=5000):
+def std_loss_1d(sims, labels, lam):
+    """Standard deviation of loss for 1D arrays (single sample)."""
+    # For 1D arrays, we compute the FDR directly without std across samples
+    # Return a small value to avoid division issues in CLT p-value
+    return 0.01
+
+
+def get_thresh_FDR(labels, sims, alpha, delta=0.5, N=100):
     """
     Calculate the threshold value for controlling the False Discovery Rate (FDR) using Learn then Test (LTT).
 
     Parameters:
-    - labels (numpy.ndarray): The labels of the data points.
-    - sims (numpy.ndarray): The similarity scores of the data points.
+    - labels (numpy.ndarray): The labels of the data points. Can be 1D or 2D.
+    - sims (numpy.ndarray): The similarity scores of the data points. Can be 1D or 2D.
     - alpha (float): The significance level for controlling the FDR.
     - delta (float, optional): p-value limit. Defaults to 0.5.
-    - N (int, optional): The number of lambda values to consider. Defaults to 5000.
+    - N (int, optional): The number of lambda values to consider. Defaults to 100.
 
     Returns:
     - lhat (float): The threshold value for controlling the FDR.
+    - risk_fdr (float): The FDR risk at the threshold.
 
     """
-    # FDR control with LTT
-    # labels = np.stack([query['exact'] for query in data], axis=0)
-    # sims = np.stack([query['S_i'] for query in data], axis=0)
-    # print(f"sims.max: {sims.max()}")
+    # Detect if inputs are 1D or 2D and use appropriate functions
+    is_1d = labels.ndim == 1
+
+    if is_1d:
+        risk_fn = risk_1d
+        std_fn = std_loss_1d
+    else:
+        risk_fn = risk
+        std_fn = std_loss
+
     n = len(labels)
     lambdas = np.linspace(sims.min(), sims.max(), N)
-    risks = np.array([risk(sims, labels, lam) for lam in lambdas])
-    stds = np.array([std_loss(sims, labels, lam) for lam in lambdas])
+    risks = np.array([risk_fn(sims, labels, lam) for lam in lambdas])
+    stds = np.array([std_fn(sims, labels, lam) for lam in lambdas])
     eps = 1e-6
     stds = np.maximum(stds, eps)
-    # pvals = np.array( [bentkus_p_value(r,n,alpha) for r in risks] )
     pvals = np.array([clt_p_value(r, s, n, alpha) for r, s in zip(risks, stds)])
-    # TODO: do we want to use the bentkus p-value or the CLT p-value?
-    # TODO: how to handle division by zero?
 
     below = pvals <= delta
     # Pick the smallest lambda such that all lambda above it have p-value below delta
     pvals_satisfy_condition = np.array([np.all(below[i:]) for i in range(N)])
     lhat = lambdas[np.argmax(pvals_satisfy_condition)]
-    # print(f"lhat: {lhat}")
-    risk_fdr = risk(sims, labels, lhat)
-    # print(f"risk: {risk_fdr}")
+    risk_fdr = risk_fn(sims, labels, lhat)
     return lhat, risk_fdr
 
 

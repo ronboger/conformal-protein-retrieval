@@ -1,0 +1,92 @@
+Bootstrap: docker
+From: pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime
+
+%labels
+    Author Ron Boger <ronboger@berkeley.edu>
+    Version 1.0
+    Description Conformal Protein Retrieval - Functional protein mining with statistical guarantees
+
+%setup
+    # Create mount points in the container rootfs BEFORE the container is created
+    # This runs on the host and $APPTAINER_ROOTFS points to the container's root
+    # Required because the system may try to bind mount these paths during build
+    mkdir -p ${APPTAINER_ROOTFS}/shared
+    mkdir -p ${APPTAINER_ROOTFS}/scratch
+    mkdir -p ${APPTAINER_ROOTFS}/groups
+    mkdir -p ${APPTAINER_ROOTFS}/home
+
+%post
+    # Ensure mount points exist (redundant but safe)
+    mkdir -p /shared /scratch /groups /home
+
+    # Update and install system dependencies
+    apt-get update && apt-get install -y \
+        git \
+        wget \
+        && rm -rf /var/lib/apt/lists/*
+
+    # Install Python dependencies
+    # Note: faiss-cpu used here; for GPU, install faiss-gpu via conda
+    pip install --no-cache-dir \
+        numpy \
+        pandas \
+        scipy \
+        scikit-learn \
+        matplotlib \
+        seaborn \
+        tqdm \
+        faiss-cpu \
+        biopython \
+        pytorch-lightning \
+        h5py \
+        transformers \
+        sentencepiece \
+        gradio>=4.0.0 \
+        fair-esm>=2.0.0
+
+    # Create workspace
+    mkdir -p /workspace/data /workspace/results /workspace/protein_vec_models
+
+    # Note: The CPR package should be installed at runtime via bind mount:
+    # apptainer exec --bind /path/to/cpr:/workspace/cpr cpr.sif pip install -e /workspace/cpr
+    # Or copy and install during build if package is available
+
+%environment
+    export PYTHONPATH=/workspace/cpr:/workspace:$PYTHONPATH
+    export GRADIO_SERVER_NAME=0.0.0.0
+    export GRADIO_SERVER_PORT=7860
+
+%runscript
+    echo "Conformal Protein Retrieval (CPR)"
+    echo "Usage:"
+    echo "  apptainer run cpr.sif cpr --help"
+    echo "  apptainer run cpr.sif python -m protein_conformal.gradio_app"
+    exec "$@"
+
+%help
+    Conformal Protein Retrieval (CPR)
+
+    This container provides tools for functional protein mining with
+    conformal guarantees, as described in:
+    "Functional protein mining with conformal guarantees"
+    Nature Communications (2025) 16:85
+
+    Usage (bind mount the repo directory):
+      CPR_DIR=/path/to/conformal-protein-retrieval
+
+      # Run CLI (use python -m for the command)
+      apptainer exec --bind $CPR_DIR:/workspace/cpr cpr.sif \
+        python -m protein_conformal.cli embed --input seqs.fasta --output emb.npy
+
+      apptainer exec --bind $CPR_DIR:/workspace/cpr cpr.sif \
+        python -m protein_conformal.cli search --query q.npy --database db.npy -o results.csv
+
+      # Run Gradio UI
+      apptainer exec --bind $CPR_DIR:/workspace/cpr cpr.sif \
+        python -m protein_conformal.gradio_app
+
+      # Interactive shell
+      apptainer shell --bind $CPR_DIR:/workspace/cpr cpr.sif
+
+    Build:
+      apptainer build cpr.sif apptainer.def

@@ -1,0 +1,66 @@
+import datetime
+import numpy as np
+import pandas as pd
+import argparse
+import os
+from tqdm import tqdm
+from protein_conformal.util import *
+
+def main():
+    parser = argparse.ArgumentParser(description='Process some integers.')
+    parser.add_argument('--alpha', type=float, default=0.1, help='Alpha value for the algorithm')
+    parser.add_argument('--partial', type=bool, default=False, help='Partial hits')
+    parser.add_argument('--num_trials', type=int, default=100, help='Number of trials to run')
+    parser.add_argument('--n_calib', type=int, default=1000, help='Number of calibration data points')
+    parser.add_argument('--delta', type=float, default=0.5, help='Delta value for the algorithm')
+    parser.add_argument('--output', type=str, default='/data/ron/protein-conformal/data/pfam_fdr.npy', help='Output file for the results')
+    parser.add_argument('--add_date', type=bool, default=True, help='Add date to output file name')
+    parser.add_argument('--data_path', type=str, default=None, help='Path to the pfam data file')
+    args = parser.parse_args()
+    alpha = args.alpha
+    num_trials = args.num_trials
+    n_calib = args.n_calib
+    delta = args.delta
+    partial = args.partial
+    
+    if args.data_path is None:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(os.path.dirname(script_dir))
+        data_path = os.path.join(project_root, 'data', 'conformal_pfam_with_lookup_dataset.npy')
+    else:
+        data_path = args.data_path
+    
+    print(f"Loading data from: {data_path}")
+    data = np.load(data_path, allow_pickle=True)
+
+    risks = []
+    tprs = []
+    lhats = []
+    fdr_cals = []
+    for trial in tqdm(range(num_trials)):
+        np.random.shuffle(data)
+        cal_data = data[:n_calib]
+        test_data = data[n_calib:]
+        X_cal, y_cal = get_sims_labels(cal_data, partial=partial)
+        X_test, y_test_exact = get_sims_labels(test_data, partial=partial)
+        lhat, fdr_cal = get_thresh_FDR(y_cal, X_cal, alpha, delta, N=100)
+        lhats.append(lhat)
+        fdr_cals.append(fdr_cal)
+        risks.append(risk(X_test, y_test_exact, lhat))
+        tprs.append(calculate_true_positives(X_test, y_test_exact, lhat))
+    
+    print("Risk: ", np.mean(risks))
+    print("TPR: ", np.mean(tprs))
+    print("Lhat: ", np.mean(lhats))
+    print("FDR Cal: ", np.mean(fdr_cals))
+
+    output_file = args.output + ('_' + str(datetime.datetime.now().date()) if args.add_date else '' + '.npy')
+
+    np.save(output_file, 
+            {'risks': risks,
+             'tprs': tprs, 
+             'lhats': lhats,
+             'fdr_cals': fdr_cals})
+
+if __name__ == "__main__":
+    main()

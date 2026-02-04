@@ -1,47 +1,59 @@
-# 1. Base image: Ubuntu 22.04
-FROM ubuntu:22.04
+# Conformal Protein Retrieval (CPR)
+# Docker image for functional protein mining with conformal guarantees
+#
+# Build: docker build -t cpr:latest .
+# Run:   docker run -p 7860:7860 -v $(pwd)/data:/workspace/data cpr:latest
 
-# 2. Prevent interactive prompts during apt installs
-ENV DEBIAN_FRONTEND=noninteractive
+FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
 
-# 3. System dependencies
+LABEL maintainer="Ron Boger <ronboger@berkeley.edu>"
+LABEL description="Conformal Protein Retrieval - Functional protein mining with statistical guarantees"
+LABEL version="1.0"
+
+# Set working directory
+WORKDIR /workspace
+
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
-      wget bzip2 ca-certificates git \
-      libglib2.0-0 libxext6 libsm6 libxrender1 \
+    git \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
-# 4. Install Miniconda
-RUN wget --quiet https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh \
- && bash Miniconda3-latest-Linux-x86_64.sh -b -p /opt/conda \
- && rm Miniconda3-latest-Linux-x86_64.sh
+# Copy requirements first for caching
+COPY requirements.txt .
 
-ENV PATH=/opt/conda/bin:$PATH
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
 
-# 5. Create a working dir and copy only environment spec
-WORKDIR /workspace
-COPY environment.yml /workspace/
+# Install additional dependencies
+RUN pip install --no-cache-dir \
+    gradio>=4.0.0 \
+    faiss-gpu \
+    biopython \
+    pytorch-lightning \
+    h5py \
+    transformers \
+    sentencepiece
 
-# Pre-accept Anaconda channel Terms of Service
-RUN conda tos accept \
-      --override-channels \
-      --channel https://repo.anaconda.com/pkgs/main && \
-    conda tos accept \
-      --override-channels \
-      --channel https://repo.anaconda.com/pkgs/r
+# Copy source code
+COPY protein_conformal/ ./protein_conformal/
+COPY scripts/ ./scripts/
+COPY pyproject.toml .
+COPY README.md .
 
-# Create the env and clean up
-RUN conda env create -f environment.yml && \
-    conda clean -afy
+# Install the package
+RUN pip install -e .
 
-# 7. Copy the rest of your code
-COPY . /workspace/
+# Create directories for data and results
+RUN mkdir -p data results protein_vec_models
 
-# 8. Activate env by default
-SHELL ["conda", "run", "-n", "protein-conformal", "/bin/bash", "-c"]
+# Environment variables
+ENV PYTHONPATH=/workspace
+ENV GRADIO_SERVER_NAME=0.0.0.0
+ENV GRADIO_SERVER_PORT=7860
 
-# # 9. Expose Gradio port
+# Expose Gradio port
 EXPOSE 7860
 
-# # 10. Default command: start your Gradio app using the conda env
-# Use exec-form so it doesn't spawn a shell and correctly resolves the env
-CMD ["conda", "run", "--no-capture-output", "-n", "protein-conformal", "python", "app.py"]
+# Default command: run Gradio app
+CMD ["python", "-m", "protein_conformal.gradio_app"]
