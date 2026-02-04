@@ -215,3 +215,4 @@ CLEAN_repo/
 notebooks_archive/
 scripts/archive/
 notebooks/*/archive/
+docs/archive/
