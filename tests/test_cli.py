@@ -61,7 +61,7 @@ def test_search_help():
     """Test that 'cpr search --help' works."""
     result = run_cli('search', '--help')
     assert result.returncode == 0
-    assert '--query' in result.stdout
+    assert '--input' in result.stdout
     assert '--database' in result.stdout
     assert '--output' in result.stdout
     assert '--k' in result.stdout
@@ -117,7 +117,7 @@ def test_search_missing_args():
     """Test that search command fails without required args."""
     result = run_cli('search')
     assert result.returncode != 0
-    assert '--query' in result.stderr or 'required' in result.stderr
+    assert '--input' in result.stderr or 'required' in result.stderr
 
 
 def test_verify_missing_args():
@@ -152,13 +152,14 @@ def test_search_with_mock_data(tmp_path):
     np.save(query_file, query_embeddings)
     np.save(db_file, db_embeddings)
 
-    # Run search
+    # Run search (use --no-filter since random embeddings won't pass FDR threshold)
     result = run_cli(
         'search',
-        '--query', str(query_file),
+        '--input', str(query_file),
         '--database', str(db_file),
         '--output', str(output_file),
-        '--k', '3'
+        '--k', '3',
+        '--no-filter'
     )
 
     assert result.returncode == 0
@@ -195,7 +196,7 @@ def test_search_with_threshold(tmp_path):
     # Run search with high threshold
     result = run_cli(
         'search',
-        '--query', str(query_file),
+        '--input', str(query_file),
         '--database', str(db_file),
         '--output', str(output_file),
         '--k', '10',
@@ -244,14 +245,15 @@ def test_search_with_metadata(tmp_path):
     })
     meta_df.to_csv(meta_file, index=False)
 
-    # Run search with metadata
+    # Run search with metadata (use --no-filter since random embeddings won't pass FDR threshold)
     result = run_cli(
         'search',
-        '--query', str(query_file),
+        '--input', str(query_file),
         '--database', str(db_file),
         '--database-meta', str(meta_file),
         '--output', str(output_file),
-        '--k', '3'
+        '--k', '3',
+        '--no-filter'
     )
 
     assert result.returncode == 0
@@ -457,7 +459,7 @@ def test_search_missing_query_file(tmp_path):
 
     result = run_cli(
         'search',
-        '--query', '/nonexistent/query.npy',
+        '--input', '/nonexistent/query.npy',
         '--database', str(db_file),
         '--output', str(output_file)
     )
@@ -475,7 +477,7 @@ def test_search_missing_database_file(tmp_path):
 
     result = run_cli(
         'search',
-        '--query', str(query_file),
+        '--input', str(query_file),
         '--database', '/nonexistent/db.npy',
         '--output', str(output_file)
     )
@@ -528,13 +530,14 @@ def test_search_with_k_larger_than_database(tmp_path):
     np.save(query_file, query_embeddings)
     np.save(db_file, db_embeddings)
 
-    # Request k=10 but only have 3 items in database
+    # Request k=10 but only have 3 items in database (use --no-filter)
     result = run_cli(
         'search',
-        '--query', str(query_file),
+        '--input', str(query_file),
         '--database', str(db_file),
         '--output', str(output_file),
-        '--k', '10'
+        '--k', '10',
+        '--no-filter'
     )
 
     # Should succeed (FAISS will return at most db size)
