@@ -111,12 +111,21 @@ cpr verify --check clean   # CLEAN enzyme classification
 
 ## Data Files
 
-Download the following files from [Zenodo](https://zenodo.org/records/14272215) and place in the `data/` directory:
+### Required Data ([Zenodo #14272215](https://zenodo.org/records/14272215))
 
-- `pfam_new_proteins.npy` (2.5 GB) - Pfam calibration data for FDR/FNR control
-- `lookup_embeddings.npy` (1.1 GB) - UniProt database embeddings (Protein-Vec)
-- `lookup_embeddings_meta_data.tsv` - Metadata for lookup database
-- `afdb_embeddings_protein_vec.npy` (4.7 GB) - AlphaFold DB embeddings (optional)
+```bash
+cd data/
+wget "https://zenodo.org/records/14272215/files/lookup_embeddings.npy?download=1" -O lookup_embeddings.npy
+wget "https://zenodo.org/records/14272215/files/lookup_embeddings_meta_data.tsv?download=1" -O lookup_embeddings_meta_data.tsv
+wget "https://zenodo.org/records/14272215/files/pfam_new_proteins.npy?download=1" -O pfam_new_proteins.npy
+```
+
+### Model Weights ([Zenodo #18478696](https://zenodo.org/records/18478696)) - for embedding new sequences
+
+```bash
+wget "https://zenodo.org/records/18478696/files/protein_vec_models.gz?download=1" -O protein_vec_models.gz
+tar -xzf protein_vec_models.gz
+```
 
 ## Protein-Vec vs CLEAN Models
 
