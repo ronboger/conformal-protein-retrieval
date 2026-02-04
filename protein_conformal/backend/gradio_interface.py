@@ -121,8 +121,10 @@ def _cached_results_dataframe(resolved_path: str, mtime: Optional[float]) -> pd.
         "lambda": "lambda_threshold",
         "lambda threshold": "lambda_threshold",
         "lambda-threshold": "lambda_threshold",
+        "threshold_mean": "lambda_threshold",
         "exactfdr": "exact_fdr",
         "partialfdr": "partial_fdr",
+        "empirical_fdr_mean": "exact_fdr",
         "exactfnr": "exact_fnr",
         "partialfnr": "partial_fnr",
     }
@@ -524,9 +526,9 @@ def run_search(query_embeddings: np.ndarray,
 """
 Below are code for I/O and generating gradio website
 """
-def process_input(input_text: str, 
+def process_input(input_text: str,
                   fasta_text: str,
-                  upload_file: Optional[Any], 
+                  upload_file: Optional[Any],
                   input_type: str,
                   risk_type: str,
                   risk_value: float,
@@ -537,6 +539,7 @@ def process_input(input_text: str,
                   metadata_db: str = DEFAULT_LOOKUP_METADATA,
                   custom_lookup_upload: Optional[Any] = None,
                   custom_metadata_upload: Optional[Any] = None,
+                  match_type: str = "Exact",
                   progress=gr.Progress()) -> Tuple[Dict[str, Any], pd.DataFrame]:
     """Wrapper that instruments the main pipeline with timing information."""
     stage_timer = StageTimer()
@@ -556,6 +559,7 @@ def process_input(input_text: str,
             metadata_db,
             custom_lookup_upload,
             custom_metadata_upload,
+            match_type,
             progress,
         )
     finally:
@@ -563,9 +567,9 @@ def process_input(input_text: str,
 
 
 def _process_input_impl(stage_timer: StageTimer,
-                        input_text: str, 
+                        input_text: str,
                         fasta_text: str,
-                        upload_file: Optional[Any], 
+                        upload_file: Optional[Any],
                         input_type: str,
                         risk_type: str,
                         risk_value: float,
@@ -576,6 +580,7 @@ def _process_input_impl(stage_timer: StageTimer,
                         metadata_db: str = DEFAULT_LOOKUP_METADATA,
                         custom_lookup_upload: Optional[Any] = None,
                         custom_metadata_upload: Optional[Any] = None,
+                        match_type: str = "Exact",
                         progress=gr.Progress()) -> Tuple[Dict[str, Any], pd.DataFrame]:
     """
     Process the input and generate predictions.
@@ -669,46 +674,87 @@ def _process_input_impl(stage_timer: StageTimer,
         progress(0.5, desc=f"Performing conformal prediction with {risk_type} control...")
         
         with stage_timer.track("threshold_lookup"):
+            # Determine match type suffix for file/column lookup
+            is_partial = match_type.lower() == "partial"
+            match_type_label = "partial" if is_partial else "exact"
+
             if risk_type.lower() == "fdr":
-                threshold_df = load_results_dataframe(
-                    "./results/fdr_thresholds.csv",
-                    required_columns=["alpha", "lambda_threshold", "exact_fdr"],
-                )
+                # Try partial FDR file if requested, fall back to exact
+                fdr_file = "./results/fdr_thresholds_partial.csv" if is_partial else "./results/fdr_thresholds.csv"
+                try:
+                    threshold_df = load_results_dataframe(
+                        fdr_file,
+                        required_columns=["alpha", "lambda_threshold"],
+                    )
+                except (FileNotFoundError, KeyError) as e:
+                    if is_partial:
+                        logger.warning(f"Partial FDR thresholds not available, using exact: {e}")
+                        threshold_df = load_results_dataframe(
+                            "./results/fdr_thresholds.csv",
+                            required_columns=["alpha", "lambda_threshold"],
+                        )
+                        match_type_label = "exact (partial unavailable)"
+                    else:
+                        raise
                 closest_idx = (threshold_df['alpha'] - risk_value).abs().idxmin()
+                closest_alpha = threshold_df.iloc[closest_idx]['alpha']
                 threshold = threshold_df.iloc[closest_idx]['lambda_threshold']
-                empirical_risk = threshold_df.iloc[closest_idx].get('exact_fdr')
+                # Look for match-type-specific FDR column
+                fdr_col = 'partial_fdr' if is_partial else 'exact_fdr'
+                empirical_risk = threshold_df.iloc[closest_idx].get(fdr_col, None)
                 risk_description = "False Discovery Rate"
                 risk_formula = "FDR = FP / (FP + TP)"
                 risk_explanation = ("Controls the proportion of false discoveries (incorrect matches) "
                                       "among all retrieved matches. Useful when you want to ensure most "
                                       "retrieved results are correct.")
+                if abs(closest_alpha - risk_value) > 0.001:
+                    logger.warning(f"Requested alpha={risk_value} not available. Using closest alpha={closest_alpha}")
             else:
-                threshold_df = load_results_dataframe(
-                    "./results/fnr_thresholds.csv",
-                    required_columns=["alpha", "lambda_threshold", "exact_fnr"],
-                )
+                # Try partial FNR file if requested, fall back to exact
+                fnr_file = "./results/fnr_thresholds_partial.csv" if is_partial else "./results/fnr_thresholds.csv"
+                try:
+                    threshold_df = load_results_dataframe(
+                        fnr_file,
+                        required_columns=["alpha", "lambda_threshold"],
+                    )
+                except (FileNotFoundError, KeyError) as e:
+                    if is_partial:
+                        logger.warning(f"Partial FNR thresholds not available, using exact: {e}")
+                        threshold_df = load_results_dataframe(
+                            "./results/fnr_thresholds.csv",
+                            required_columns=["alpha", "lambda_threshold"],
+                        )
+                        match_type_label = "exact (partial unavailable)"
+                    else:
+                        raise
                 closest_idx = (threshold_df['alpha'] - risk_value).abs().idxmin()
+                closest_alpha = threshold_df.iloc[closest_idx]['alpha']
                 threshold = threshold_df.iloc[closest_idx]['lambda_threshold']
-                empirical_risk = threshold_df.iloc[closest_idx].get('exact_fnr')
+                # Look for match-type-specific FNR column
+                fnr_col = 'partial_fnr' if is_partial else 'exact_fnr'
+                empirical_risk = threshold_df.iloc[closest_idx].get(fnr_col, None)
                 risk_description = "False Negative Rate"
                 risk_formula = "FNR = FN / (FN + TP)"
                 risk_explanation = ("Controls the proportion of missed true matches among all actual matches. "
                                       "Useful when you want to minimize missing true relationships, even at the "
                                       "cost of including some false positives.")
+                if abs(closest_alpha - risk_value) > 0.001:
+                    logger.warning(f"Requested alpha={risk_value} not available. Using closest alpha={closest_alpha}")
             
         conformal_results = {
-            "message": f"Used precomputed threshold for {risk_description} control, risk level alpha {risk_value}",
+            "message": f"Used precomputed threshold for {risk_description} control, alpha={closest_alpha}, match_type={match_type_label}" + (f" (requested α={risk_value})" if abs(closest_alpha - risk_value) > 0.001 else ""),
             "threshold": float(threshold),
             "risk_type": risk_type.lower(),
+            "match_type": match_type_label,
             "risk_description": risk_description,
             "risk_formula": risk_formula,
             "risk_explanation": risk_explanation,
-            "empirical_risk": float(empirical_risk),
+            "empirical_risk": float(empirical_risk) if empirical_risk is not None else None,
             "n_matches": 0,  # Will be updated after search
             "match_rate": 0.0,  # Will be updated after search
             "n_calib": len(threshold_df),
             "match_info": [],  # Will be populated after search
-            "has_probability_calibration": False,  # Will be set to True later if used
+            "has_probability_calibration": True,  # Enable Venn-Abers probability calibration
             "probability_calibration_method": "Venn-Abers prediction with isotonic regression"
         }
 
@@ -735,32 +781,36 @@ def _process_input_impl(stage_timer: StageTimer,
         
         # If probability calibration is available, add probabilities to the matches
         if conformal_results["has_probability_calibration"]:
-            # Using Venn-Abers for probability calibration
+            # Using precomputed calibration data to interpolate probabilities
             progress(0.8, desc="Calibrating probabilities...")
             with stage_timer.track("probability_calibration"):
-                # Load calibration data for Venn-Abers from CSV
-                cal_df = load_results_dataframe(
-                    DEFAULT_CALIBRATION_DATA,
-                    required_columns=["similarity", "prob_exact_p0", "prob_exact_p1"],
-                )
-                
-                # Extract similarity scores and labels for probability calibration
-                X_cal = cal_df['similarity'].values.reshape(-1, 1)
-                
-                # Use exact match probabilities by default
-                y_cal = np.where(cal_df['prob_exact_p1'] > 0.5, 1, 0).reshape(-1, 1)
-                
-                X_cal_flat = X_cal.flatten()
-                y_cal_flat = y_cal.flatten()
-                
-                # Calculate probabilities for each match
-                for i, match in enumerate(all_matches):
-                    sim_score = match["D_score"]
-                    p0, p1 = simplifed_venn_abers_prediction(X_cal_flat, y_cal_flat, sim_score)
-                    # Average the probabilities as in the paper
-                    all_matches[i]["prob_exact"] = (p0 + p1) / 2
-                    all_matches[i]["p0"] = p0  # Store individual probabilities for inspection
-                    all_matches[i]["p1"] = p1
+                try:
+                    # Load precomputed calibration data
+                    cal_df = load_results_dataframe(
+                        DEFAULT_CALIBRATION_DATA,
+                        required_columns=["similarity", "prob_exact_p0", "prob_exact_p1"],
+                    )
+
+                    # Sort by similarity for interpolation
+                    cal_df = cal_df.sort_values('similarity')
+                    sim_cal = cal_df['similarity'].values
+                    p0_cal = cal_df['prob_exact_p0'].values
+                    p1_cal = cal_df['prob_exact_p1'].values
+
+                    # Calculate probabilities for each match using interpolation
+                    for i, match in enumerate(all_matches):
+                        sim_score = match["D_score"]
+                        # Interpolate p0 and p1 from calibration data
+                        p0 = np.interp(sim_score, sim_cal, p0_cal)
+                        p1 = np.interp(sim_score, sim_cal, p1_cal)
+                        # Average the probabilities as in the paper
+                        all_matches[i]["prob_exact"] = (p0 + p1) / 2
+                        all_matches[i]["p0"] = float(p0)
+                        all_matches[i]["p1"] = float(p1)
+                except Exception as e:
+                    logger.warning(f"Probability calibration failed: {e}. Using similarity scores as proxy.")
+                    for i, match in enumerate(all_matches):
+                        all_matches[i]["prob_exact"] = match["D_score"]
         else:
             # If no probability calibration, use similarity as a proxy
             for i, match in enumerate(all_matches):
@@ -1016,14 +1066,27 @@ def create_interface():
                     value="FDR",
                     info="FDR: Controls false positives among results. FNR: Controls missed true matches."
                 )
-                
+
+                gr.Markdown("""
+                **Available α values:**
+                - **FDR**: α=0.1 only (paper-verified threshold)
+                - **FNR**: α ∈ {0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2}
+                """)
+
                 risk_value = gr.Slider(
-                    minimum=0.01,
+                    minimum=0.001,
                     maximum=0.2,
                     value=0.1,
-                    step=0.01,
+                    step=0.001,
                     label="Risk Level Alpha",
-                    info="Lower values provide stronger statistical guarantees but may reduce the number of matches (for FDR) or increase database size (for FNR)"
+                    info="For FDR, only α=0.1 is calibrated. For FNR, nearest available α will be used."
+                )
+
+                match_type = gr.Radio(
+                    ["Exact", "Partial"],
+                    label="Match Type",
+                    value="Exact",
+                    info="Exact: All Pfam domains match. Partial: At least one Pfam domain matches."
                 )
                 
                 # Database selection
@@ -1140,13 +1203,14 @@ def create_interface():
         
         # Main prediction submission - hardcode input_type as "fasta_format"
         submit_btn.click(
-            fn=lambda fasta, upload, risk_t, risk_v, max_k, use_pv, custom_emb, lookup, metadata, custom_lookup, custom_meta: 
-                process_input("", fasta, upload, "fasta_format", risk_t, risk_v, max_k, use_pv, custom_emb, lookup, metadata, custom_lookup, custom_meta),
+            fn=lambda fasta, upload, risk_t, risk_v, max_k, use_pv, custom_emb, lookup, metadata, custom_lookup, custom_meta, m_type:
+                process_input("", fasta, upload, "fasta_format", risk_t, risk_v, max_k, use_pv, custom_emb, lookup, metadata, custom_lookup, custom_meta, m_type),
             inputs=[
-                fasta_text, upload_file, 
+                fasta_text, upload_file,
                 risk_type, risk_value, max_results_slider,
                 use_protein_vec, custom_embeddings_state,
-                lookup_db_state, metadata_db_state, custom_lookup_upload, custom_metadata_upload
+                lookup_db_state, metadata_db_state, custom_lookup_upload, custom_metadata_upload,
+                match_type
             ],
             outputs=[results_summary, results_table]
         )
