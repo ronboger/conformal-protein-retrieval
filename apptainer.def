@@ -47,8 +47,12 @@ From: pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime
     # Create workspace
     mkdir -p /workspace/data /workspace/results /workspace/protein_vec_models
 
+    # Note: The CPR package should be installed at runtime via bind mount:
+    # apptainer exec --bind /path/to/cpr:/workspace/cpr cpr.sif pip install -e /workspace/cpr
+    # Or copy and install during build if package is available
+
 %environment
-    export PYTHONPATH=/workspace
+    export PYTHONPATH=/workspace/cpr:/workspace:$PYTHONPATH
     export GRADIO_SERVER_NAME=0.0.0.0
     export GRADIO_SERVER_PORT=7860
 
@@ -67,16 +71,22 @@ From: pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime
     "Functional protein mining with conformal guarantees"
     Nature Communications (2025) 16:85
 
-    Usage:
-      # Run CLI
-      apptainer exec cpr.sif cpr embed --input seqs.fasta --output emb.npy
-      apptainer exec cpr.sif cpr search --query q.npy --database db.npy -o results.csv
+    Usage (bind mount the repo directory):
+      CPR_DIR=/path/to/conformal-protein-retrieval
+
+      # Run CLI (use python -m for the command)
+      apptainer exec --bind $CPR_DIR:/workspace/cpr cpr.sif \
+        python -m protein_conformal.cli embed --input seqs.fasta --output emb.npy
+
+      apptainer exec --bind $CPR_DIR:/workspace/cpr cpr.sif \
+        python -m protein_conformal.cli search --query q.npy --database db.npy -o results.csv
 
       # Run Gradio UI
-      apptainer exec cpr.sif python -m protein_conformal.gradio_app
+      apptainer exec --bind $CPR_DIR:/workspace/cpr cpr.sif \
+        python -m protein_conformal.gradio_app
 
       # Interactive shell
-      apptainer shell cpr.sif
+      apptainer shell --bind $CPR_DIR:/workspace/cpr cpr.sif
 
     Build:
       apptainer build cpr.sif apptainer.def
