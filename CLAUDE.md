@@ -1,23 +1,31 @@
 # Claude Code Guidelines for CPR
 
-## Working Patterns That Help
+## Working Patterns
 
-### Verification-First Development
-- Before changing code, verify current behavior matches expectations
+### Before Writing Code
+- **Describe your approach first** and wait for approval before implementing
+- **Ask clarifying questions** if requirements are ambiguous - don't assume
+- **If a task requires changes to more than 3 files**, stop and break it into smaller tasks first
+- Verify current behavior matches expectations before changing anything
+
+### While Writing Code
 - Run existing tests before and after changes
 - For paper reproduction, verify numbers match before claiming success
-- Use `scripts/verify_*.py` to check paper claims
-
-### Incremental Validation
-- When running long jobs, check intermediate results (e.g., α=0.1 before waiting for all α levels)
-- Use SLURM job logs to monitor progress: `cat logs/job_*.log | tail -20`
 - Submit fast/reduced trials first to validate approach, then full runs
 
-### Cleanup as You Go
+### After Writing Code
+- **List what could break** and suggest tests to cover edge cases
+- Run the test suite to confirm nothing regressed
 - Archive (don't delete) old scripts - they may have useful patterns
-- Use `scripts/archive/` and `notebooks/*/archive/` for superseded code
-- Keep only essential SLURM scripts in main directories
-- Consolidate documentation rather than creating new files
+
+### Bug Fixing
+- **Start by writing a test that reproduces the bug**
+- Fix the code until the test passes
+- Keep the test to prevent regression
+
+### Learning From Mistakes
+- **When corrected, add a new rule to this file** so the mistake never happens again
+- Document gotchas and edge cases discovered during debugging
 
 ### Session Continuity
 - Check `DEVELOPMENT.md` changelog for recent work
