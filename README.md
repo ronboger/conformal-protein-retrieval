@@ -57,15 +57,23 @@ cpr embed --input sequences.fasta --output embeddings.npy --model clean
 
 ### 2. Search for similar proteins with conformal guarantees
 
+The `cpr search` command accepts **both FASTA files and pre-computed embeddings**:
+
 ```bash
-# Search with FDR control at α=0.1 (threshold λ ≈ 0.99998 for Protein-Vec)
-cpr search \
-    --query query_embeddings.npy \
-    --database data/lookup_embeddings.npy \
-    --database-meta data/lookup_embeddings_meta_data.tsv \
-    --output results.csv \
-    --k 1000 \
-    --threshold 0.99998
+# From FASTA file (auto-embeds with Protein-Vec)
+cpr search --input sequences.fasta --output results.csv --fdr 0.1
+
+# From pre-computed embeddings
+cpr search --input embeddings.npy --output results.csv --fdr 0.1
+
+# With FNR control instead of FDR
+cpr search --input sequences.fasta --output results.csv --fnr 0.1
+
+# With explicit threshold
+cpr search --input sequences.fasta --output results.csv --threshold 0.99998
+
+# Exploratory mode (no filtering, return all k neighbors)
+cpr search --input sequences.fasta --output results.csv --no-filter
 ```
 
 ### 3. Convert similarity scores to calibrated probabilities
@@ -141,27 +149,12 @@ To calibrate FDR/FNR thresholds for your own protein search tasks:
 Here's a full example searching viral domains against the Pfam database with FDR control:
 
 ```bash
-# Step 1: Embed query sequences
-cpr embed \
-    --input viral_domains.fasta \
-    --output viral_embeddings.npy \
-    --model protein-vec
+# Option A: One-step search from FASTA (embeds automatically)
+cpr search --input viral_domains.fasta --output viral_hits.csv --fdr 0.1
 
-# Step 2: Search with FDR α=0.1 (λ ≈ 0.99998 from calibration)
-cpr search \
-    --query viral_embeddings.npy \
-    --database data/lookup_embeddings.npy \
-    --database-meta data/lookup_embeddings_meta_data.tsv \
-    --output viral_hits.csv \
-    --k 1000 \
-    --threshold 0.99998
-
-# Step 3: Add calibrated probabilities for each hit
-cpr prob \
-    --input viral_hits.csv \
-    --calibration data/pfam_new_proteins.npy \
-    --output viral_hits_with_probs.csv \
-    --n-calib 1000
+# Option B: Two-step with explicit embedding
+cpr embed --input viral_domains.fasta --output viral_embeddings.npy
+cpr search --input viral_embeddings.npy --output viral_hits.csv --fdr 0.1
 ```
 
 The output CSV will contain:
