@@ -165,20 +165,49 @@ cpr search --input data/gene_unknown/unknown_aa_seqs.npy \
 
 ## FDR/FNR Threshold Reference
 
-These thresholds control the trade-off between hits and false positives:
+These thresholds control the trade-off between hits and false positives.
 
-| α Level | FDR Threshold (λ) | FNR Threshold (λ) | Use Case |
-|---------|-------------------|-------------------|----------|
-| 0.001 | (see csv) | 0.9997904 | Ultra-stringent |
-| 0.01 | (see csv) | 0.9998495 | Very stringent |
-| 0.05 | (see csv) | 0.9998899 | Stringent |
-| **0.1** | **0.9999802** | **0.9999076** | **Paper default** |
-| 0.15 | (see csv) | 0.9999174 | Relaxed |
-| 0.2 | (see csv) | 0.9999245 | Discovery-focused |
+### FDR Thresholds (False Discovery Rate)
 
-**Note**: FDR threshold at α=0.1 is the paper-verified value. Other FDR values require running `scripts/compute_fdr_table.py`.
+Controls the expected fraction of hits that are false positives.
 
-Full computed tables in `results/fdr_thresholds.csv` and `results/fnr_thresholds.csv`.
+| α Level | Threshold (λ) | Std Dev | Use Case |
+|---------|---------------|---------|----------|
+| **0.1** | **0.9999801** | ±1.7e-06 | **Paper default** |
+
+**Note**: FDR threshold at α=0.1 is verified against the paper (0.9999802). Additional alpha levels can be computed with `scripts/compute_fdr_table.py`.
+
+### FNR Thresholds (False Negative Rate) - Exact Match
+
+Controls the expected fraction of true matches you miss. "Exact match" requires all Pfam domains to match.
+
+| α Level | Threshold (λ) | Std Dev | Use Case |
+|---------|---------------|---------|----------|
+| 0.001 | 0.9997904 | ±2.3e-05 | Ultra-stringent |
+| 0.005 | 0.9998338 | ±8.2e-06 | Very stringent |
+| 0.01 | 0.9998495 | ±5.5e-06 | Stringent |
+| 0.02 | 0.9998679 | ±5.1e-06 | Moderate |
+| 0.05 | 0.9998899 | ±3.3e-06 | Balanced |
+| **0.1** | **0.9999076** | ±2.2e-06 | **Recommended** |
+| 0.15 | 0.9999174 | ±1.4e-06 | Relaxed |
+| 0.2 | 0.9999245 | ±1.3e-06 | Discovery-focused |
+
+### FNR Thresholds - Partial Match
+
+"Partial match" requires at least one Pfam domain to match (more permissive).
+
+| α Level | Threshold (λ) | Std Dev | Use Case |
+|---------|---------------|---------|----------|
+| 0.001 | 0.9997646 | ±1.5e-06 | Ultra-stringent |
+| 0.005 | 0.9997821 | ±2.8e-06 | Very stringent |
+| 0.01 | 0.9997946 | ±3.1e-06 | Stringent |
+| 0.02 | 0.9998108 | ±3.5e-06 | Moderate |
+| 0.05 | 0.9998389 | ±3.0e-06 | Balanced |
+| **0.1** | **0.9998626** | ±2.8e-06 | **Recommended** |
+| 0.15 | 0.9998779 | ±2.2e-06 | Relaxed |
+| 0.2 | 0.9998903 | ±2.1e-06 | Discovery-focused |
+
+Full computed tables with min/max values in `results/fdr_thresholds.csv`, `results/fnr_thresholds.csv`, and `results/fnr_thresholds_partial.csv`.
 
 ---
 
