@@ -1,39 +1,50 @@
 # Claude Code Guidelines for CPR
 
+## Working Patterns That Help
+
+### Verification-First Development
+- Before changing code, verify current behavior matches expectations
+- Run existing tests before and after changes
+- For paper reproduction, verify numbers match before claiming success
+- Use `scripts/verify_*.py` to check paper claims
+
+### Incremental Validation
+- When running long jobs, check intermediate results (e.g., α=0.1 before waiting for all α levels)
+- Use SLURM job logs to monitor progress: `cat logs/job_*.log | tail -20`
+- Submit fast/reduced trials first to validate approach, then full runs
+
+### Cleanup as You Go
+- Archive (don't delete) old scripts - they may have useful patterns
+- Use `scripts/archive/` and `notebooks/*/archive/` for superseded code
+- Keep only essential SLURM scripts in main directories
+- Consolidate documentation rather than creating new files
+
+### Session Continuity
+- Check `DEVELOPMENT.md` changelog for recent work
+- Check running SLURM jobs: `squeue -u ronb`
+- Check `results/*.csv` for computed values
+- The development log below tracks session-to-session context
+
+---
+
 ## Bash Guidelines
 
 ### IMPORTANT: Avoid commands that cause output buffering issues
-
-- DO NOT pipe output through `head`, `tail`, `less`, or `more` when monitoring or checking command output
-- DO NOT use `| head -n X` or `| tail -n X` to truncate output - these cause buffering problems
-- Instead, let commands complete fully, or use `-max-lines` flags if the command supports them
-- For log monitoring, prefer reading files directly rather than piping through filters
-
-### When checking command output:
-
-- Run commands directly without pipes when possible
-- If you need to limit output, use command-specific flags (e.g., `git log -n 10` instead of `git log | head -10`)
-- Avoid chained pipes that can cause output to buffer indefinitely
+- DO NOT pipe through `head`, `tail`, `less`, or `more` when monitoring
+- Use command-specific flags: `git log -n 10` not `git log | head -10`
+- For log files, read directly rather than piping through filters
 
 ### IMPORTANT: Use $HOME2 for storage, not $HOME
-
-- `$HOME` (/home/ronb) has limited quota - do NOT use for large files or caches
-- `$HOME2` (/groups/doudna/projects/ronb/) has 2 PB of storage - use for everything
-- For Apptainer/Docker cache: `export APPTAINER_CACHEDIR=$HOME2/.apptainer_cache`
-- For pip cache: `export PIP_CACHE_DIR=$HOME2/.pip_cache`
-- For conda envs: use `$HOME2/miniconda3` or shared conda at `/shared/software/miniconda3/latest`
-- For temporary build files: use `$HOME2/tmp` or project directories
-- NEVER create caches or large files in `$HOME` - builds will fail with disk quota errors
+- `$HOME` (/home/ronb) has limited quota - builds will fail
+- `$HOME2` (/groups/doudna/projects/ronb/) has 2 PB storage
+- Set: `APPTAINER_CACHEDIR=$HOME2/.apptainer_cache`
+- Set: `PIP_CACHE_DIR=$HOME2/.pip_cache`
 
 ### IMPORTANT: Use SLURM for GPU or heavy CPU tasks
-
-- NEVER run GPU-requiring code on login nodes - always submit to SLURM
-- NEVER run CPU-intensive builds (Apptainer, large pip installs) on login nodes
-- Available partitions: `standard` (CPU), `gpu` (GPU), `memory` (high-mem)
-- For GPU jobs: `#SBATCH --partition=gpu`
-- For CPU builds: `#SBATCH --partition=standard`
-- Example SLURM scripts in `scripts/slurm_*.sh`
-- Always use `eval "$(/shared/software/miniconda3/latest/bin/conda shell.bash hook)"` for conda in SLURM jobs
+- NEVER run GPU code on login nodes - submit to SLURM
+- Partitions: `standard` (CPU), `gpu` (GPU), `memory` (high-mem)
+- Always use `eval "$(/shared/software/miniconda3/latest/bin/conda shell.bash hook)"` in SLURM
+- Example scripts: `scripts/slurm_*.sh`
 
 ---
 
@@ -43,241 +54,128 @@
 - **Title**: "Functional protein mining with conformal guarantees"
 - **Journal**: Nature Communications (2025) 16:85
 - **DOI**: https://doi.org/10.1038/s41467-024-55676-y
-- **Authors**: Ron S. Boger, Seyone Chithrananda, Anastasios N. Angelopoulos, Peter H. Yoon, Michael I. Jordan, Jennifer A. Doudna
 
-### Key Claims to Verify
-1. **Figure 2A**: 39.6% of JCVI Syn3.0 genes (59/149) annotated at FDR α=0.1
-2. **Tables 1-2**: CLEAN enzyme classification (New-392, Price-149)
-3. **Tables 4-6**: DALI prefiltering (82.8% TPR, 31.5% DB reduction)
-4. **Figure 2H**: Venn-Abers calibration (|p̂⁰ - p̂¹| ≈ 0)
+### Verified Paper Claims ✅
+| Claim | Paper Value | Verified Value |
+|-------|-------------|----------------|
+| Syn3.0 annotation (α=0.1) | 39.6% (59/149) | 39.6% (59/149) |
+| FDR threshold (α=0.1) | 0.9999802250 | 0.9999801 |
+| DALI TPR | 82.8% | 81.8% |
+| DALI DB reduction | 31.5% | 31.5% |
+| CLEAN loss ≤ α | 1.0 | 0.97 |
 
 ### Core Algorithms (in `protein_conformal/util.py`)
-- `get_thresh_FDR()` / `get_thresh_new_FDR()` - FDR threshold via conformal risk control
-- `get_thresh_new()` - FNR threshold calculation
-- `simplifed_venn_abers_prediction()` - Calibrated probability assignment
-- `scope_hierarchical_loss()` - Hierarchical loss for SCOPe/EC classification
-- `load_database()` / `query()` - FAISS operations for similarity search
+- `get_thresh_FDR()` / `get_thresh_new_FDR()` - FDR threshold
+- `get_thresh_new()` - FNR threshold
+- `simplifed_venn_abers_prediction()` - Calibrated probabilities
+- `scope_hierarchical_loss()` - Hierarchical loss
+- `load_database()` / `query()` - FAISS operations
 
-### Data Files (Zenodo: https://zenodo.org/records/14272215)
-- `pfam_new_proteins.npy` (2.5 GB) - Pfam calibration data
-- `lookup_embeddings.npy` (1.1 GB) - UniProt embeddings
-- `afdb_embeddings_protein_vec.npy` (4.7 GB) - AFDB embeddings
+### ⚠️ Data Leakage Warning
+**DO NOT USE** `conformal_pfam_with_lookup_dataset.npy` from backup directories.
+**USE** `pfam_new_proteins.npy` from Zenodo - produces correct threshold.
 
-### Protein-Vec Model Weights
-- Location: Google Drive (to be added to repo)
-- Required files: `protein_vec.ckpt`, `protein_vec_params.json`, `model_protein_moe.py`, `utils_search.py`
+---
+
+## Key Files Reference
+
+### CLI
+- `protein_conformal/cli.py` - Main CLI (`cpr embed`, `cpr search`, `cpr verify`)
+
+### Threshold Computation
+- `scripts/compute_fdr_table.py` - FDR thresholds (use `--partial` for partial match)
+- `scripts/compute_fnr_table.py` - FNR thresholds
+- `scripts/slurm_compute_fdr_thresholds.sh` - SLURM wrapper
+- `scripts/slurm_compute_fnr_thresholds.sh` - SLURM wrapper
+
+### Verification
+- `scripts/verify_syn30.py` - JCVI Syn3.0 (Figure 2A)
+- `scripts/verify_dali.py` - DALI prefiltering (Tables 4-6)
+- `scripts/verify_clean.py` - CLEAN enzyme (Tables 1-2)
+
+### Results
+- `results/fdr_thresholds.csv` - FDR thresholds with stats
+- `results/fnr_thresholds.csv` - FNR exact match thresholds
+- `results/fnr_thresholds_partial.csv` - FNR partial match thresholds
+- `results/dali_thresholds.csv` - DALI prefiltering results
+
+### Documentation
+- `GETTING_STARTED.md` - User quick-start (most important)
+- `DEVELOPMENT.md` - Dev status and changelog
+- `DATA.md` - Data file documentation
+- `REPO_ORGANIZATION.md` - Paper figures → code mapping
 
 ---
 
 ## Development Log
 
-### 2025-01-28 14:30 PST - Initial Session
+### 2026-02-03 - Cleanup & Consolidation
 
 **Completed:**
-- [x] Merged `origin/gradio-ron` into local (NOT pushed to origin/main)
-- [x] Removed duplicate `src/protein_conformal/` directory (2,280 lines)
-- [x] Removed `pfam/tmp.py` temp file
-- [x] Created `pyproject.toml` with modern packaging and `cpr` CLI entry point
-- [x] Created test infrastructure: `tests/conftest.py`, `tests/test_util.py`
-- [x] Created documentation: `DEVELOPMENT.md`, `docs/INSTALLATION.md`, `docs/QUICKSTART.md`
-- [x] Created `REPO_ORGANIZATION.md` mapping paper figures to code
-- [x] Added `docker-compose.yml`
-- [x] Read and analyzed the full Nature Communications paper
+- Archived 16 redundant scripts to `scripts/archive/`
+- Archived duplicate Python files from `notebooks/pfam/`
+- Consolidated threshold CSVs (removed "simple" versions)
+- Added full threshold tables to `GETTING_STARTED.md`
+- Merged `SESSION_SUMMARY.md` into `DEVELOPMENT.md`
+- Archived outdated `docs/QUICKSTART.md`
+- Updated this file with working patterns
 
-**Current Branch:** `refactor/cpr-cleanup-and-tests` (4 commits ahead of origin/main)
+**FDR Job Status:**
+- Job 1012664 (fdr-fast): 20 trials, α=0.1 verified as 0.99998006
 
-**Key Findings:**
-- CLEAN data file exists and is NOT empty (84 MB)
-- `results/fdr_thresholds.csv` is nearly empty (just headers)
-- Local main has merge but origin/main is clean - can reset if needed
-
-**Pending Tasks:**
-1. Download Zenodo data files
-2. Verify JCVI Syn3.0 results (39.6% annotation rate) - HIGHEST PRIORITY
-3. Run test suite and fix failures
-4. Add Protein-Vec model weights (user will provide)
-5. Create CLI entry point
-
-**Questions for User:**
-- Protein-Vec weights location? → User will add to folder
-- Zenodo download? → User asked Claude to download
+**Final Structure:**
+- 4 SLURM scripts (build, embed, fdr, fnr)
+- 4 results CSVs (fdr, fnr, fnr_partial, dali)
+- 51 tests passing
 
 ---
 
-### 2026-02-02 ~11:00 PST - Server Session (Verification & CLI)
+### 2026-02-02 - Verification & CLI
 
 **Completed:**
-- [x] Verified JCVI Syn3.0 result: **59/149 = 39.6%** ✓ MATCHES PAPER
-- [x] Fixed FDR threshold bug (`get_thresh_FDR` now handles 1D and 2D arrays)
-- [x] Fixed numpy deprecation warnings (`interpolation=` → `method=`)
-- [x] Fixed test suite - all 27 tests pass
-- [x] Created CLI: `cpr embed`, `cpr search`, `cpr verify`
-- [x] Extracted Protein-Vec models and copied necessary Python files
-- [x] Fixed `setup.py` conflict with `pyproject.toml`
-- [x] Fixed `__init__.py` to not require gradio for core imports
-- [x] Created `DATA.md` documenting data requirements (GitHub vs Zenodo)
-- [x] Created `LOCAL_NOTES.md` (gitignored) for cluster-specific info
-- [x] Organized `unknown_aa_seqs.*` files into `data/gene_unknown/`
-
-**Key Files Changed:**
-- `protein_conformal/__init__.py` - Made gradio import optional
-- `protein_conformal/util.py` - Fixed FDR bug, numpy deprecation
-- `protein_conformal/cli.py` - NEW: CLI entry point
-- `tests/test_util.py` - Fixed incorrect test expectation
-- `setup.py` - Fixed src/ directory reference
-- `DATA.md` - NEW: Data documentation
-
-**Verification Results:**
-- FDR threshold (α=0.1): λ = 0.999980225003127
-- Syn3.0 hits: 59/149 = 39.6% (matches paper Figure 2A)
+- Verified Syn3.0: 59/149 = 39.6% ✅
+- Fixed FDR bug (1D/2D array handling)
+- Created CLI with `embed`, `search`, `verify` commands
+- Created verification scripts for DALI, CLEAN
+- Investigated data leakage in backup dataset
 
 **Environment:**
-- Conda env: `conformal-s` (Python 3.11.10)
-- Key packages: faiss 1.9.0, torch 2.5.0, numpy 1.26.4
-
-**Next Steps:**
-1. Merge undergrad's gradio branch (`origin/gradio`)
-2. Verify CLEAN enzyme results (Tables 1-2)
-3. Verify DALI prefiltering results (Tables 4-6)
-4. Add more integration tests for paper results
+- Conda: `conformal-s` (Python 3.11.10)
+- Packages: faiss 1.9.0, torch 2.5.0, numpy 1.26.4
 
 ---
 
-### 2026-02-02 ~16:00 PST - FDR Data Investigation & Verification Scripts
+### 2026-01-28 - Initial Session
 
-**Completed:**
-- [x] Created DALI verification script (`scripts/verify_dali.py`)
-  - Result: 81.8% TPR, 31.5% DB reduction ✓ (paper: 82.8% TPR)
-- [x] Created CLEAN verification script (`scripts/verify_clean.py`)
-  - Result: mean loss 0.97 ≤ α=1.0 ✓
-- [x] Added multi-model embedding support to CLI (`--model protein-vec|clean`)
-- [x] Created Dockerfile and apptainer.def for containerization
-- [x] **CRITICAL**: Investigated FDR calibration data discrepancy
-- [x] Created `scripts/quick_fdr_check.py` for dataset comparison
-- [x] Fixed `slurm_calibrate_fdr.sh` to use correct dataset
-
-**Key Finding - Data Leakage in Backup Dataset:**
-
-| Dataset | Samples | Positive Rate | FDR Threshold |
-|---------|---------|---------------|---------------|
-| `pfam_new_proteins.npy` (CORRECT) | 1,864 | 0.22% | 0.9999820199 |
-| `conformal_pfam_with_lookup_dataset.npy` (LEAKY) | 10,000 | 3.00% | 0.9999644648 |
-| Paper reported | — | — | 0.9999802250 |
-
-The backup dataset has **data leakage**: first 50 samples all have "PF01266;" (same Pfam family).
-The correct dataset (`pfam_new_proteins.npy`) has diverse families and matches paper threshold.
-
-**Files Changed:**
-- `scripts/slurm_calibrate_fdr.sh` - Fixed to use correct dataset
-- `DEVELOPMENT.md` - Added data leakage warning
-- `scripts/verify_dali.py` - NEW: DALI verification
-- `scripts/verify_clean.py` - NEW: CLEAN verification
-- `scripts/quick_fdr_check.py` - NEW: Dataset comparison
-- `Dockerfile`, `apptainer.def` - NEW: Container definitions
-
-**Verification Summary:**
-| Claim | Paper | Reproduced | Status |
-|-------|-------|------------|--------|
-| Syn3.0 annotation | 39.6% (59/149) | 39.6% (59/149) | ✓ EXACT |
-| FDR threshold | 0.9999802250 | 0.9999820199 | ✓ (~0.002% diff) |
-| DALI TPR | 82.8% | 81.8% | ✓ (~1% diff) |
-| DALI reduction | 31.5% | 31.5% | ✓ EXACT |
-| CLEAN loss | ≤ α=1.0 | 0.97 | ✓ |
-
-**Next Steps:**
-1. Test precomputed probability lookup CSV is reproducible
-2. Add `cpr prob --precomputed` for fast probability with model-specific calibration
-3. Build and test Docker/Apptainer images
-4. Integrate full CLEAN model verification (requires CLEAN package)
+- Removed duplicate `src/protein_conformal/`
+- Created `pyproject.toml` and test infrastructure
+- Created initial documentation
 
 ---
 
-### 2026-02-03 ~09:30 PST - Threshold Computation & CLEAN Integration
-
-**Completed:**
-- [x] Fixed Apptainer mount point issue (`%setup` section creates dirs before container init)
-- [x] Submitted FDR threshold job (100 trials × 8 alpha levels) - Job 1012489
-- [x] Created `scripts/compute_fnr_table.py` for FNR threshold computation
-- [x] Added `--partial` flag to both FDR and FNR scripts for partial match support
-- [x] Submitted FNR threshold job - Job 1012530
-- [x] Tested CLEAN embeddings on GPU - **WORKING**
-- [x] Committed and pushed Apptainer fixes to origin
-
-**CLEAN Embedding Test Results:**
-```
-GPU: NVIDIA H200
-Embeddings shape: (2, 128)  # CLEAN uses 128-dim, not 1024 like Protein-Vec
-Min: -2.7802, Max: 2.5827, Mean: 0.0498
-```
-- Requires: `pip install fair-esm>=2.0.0`
-- CLEAN model weights: `CLEAN_repo/app/data/pretrained/CLEAN_pretrained/`
-
-**Blocked:**
-- **Apptainer build**: glibc 2.33/2.34 mismatch - PyTorch 2.1.0 has older glibc than cluster's fakeroot
-  - **Fix**: Update to `pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime` base image
-
-**Running Jobs:**
-- Job 1012489: FDR thresholds (exact match) - ~50 min, still on α=0.001
-- Job 1012530: FNR thresholds (exact + partial) - just started
-
-**Files Created/Modified:**
-- `scripts/compute_fnr_table.py` - NEW: FNR threshold computation
-- `scripts/slurm_compute_fnr_thresholds.sh` - NEW: SLURM job for FNR
-- `scripts/compute_fdr_table.py` - Added `--partial` flag
-- `scripts/slurm_compute_fdr_thresholds.sh` - Increased time/memory
-- `apptainer.def` - Added `%setup` section for mount points
-
-**Next Steps:**
-1. Wait for FDR job to complete, verify α=0.1 ≈ 0.999980225
-2. Submit partial match FDR job once exact matches verified
-3. Update README with CLEAN embedding instructions
-4. Update Apptainer base image to PyTorch 2.4+
-5. Update GETTING_STARTED.md with computed thresholds
-
----
-
-### Session Notes Template
-
-```
-### YYYY-MM-DD HH:MM TZ - Session Description
-
-**Completed:**
-- [ ] Task 1
-- [ ] Task 2
-
-**Blocked By:**
-- Issue 1
-
-**Next Steps:**
-- Step 1
-- Step 2
-```
-
----
-
-## Best Practices for This Codebase
+## Best Practices
 
 ### Testing
-- Always run `pytest tests/ -v` before committing
-- Add regression tests for paper-critical numbers
-- Use fixtures from `tests/conftest.py` for consistent test data
+```bash
+pytest tests/ -v                    # Run all tests
+pytest tests/test_util.py -v        # Just util tests
+pytest tests/test_cli.py -v         # Just CLI tests
+```
 
 ### Git Workflow
-- Work on feature branches, NOT main
-- Don't push to main until results are verified
-- Use descriptive commit messages referencing paper figures/tables
+- Work on feature branches, not main
+- Run tests before committing
+- Use descriptive commits referencing paper figures/tables
+
+### SLURM Jobs
+```bash
+squeue -u ronb                      # Check running jobs
+cat logs/job_*.log | tail -20       # Check recent output (use Read tool)
+scancel JOBID                       # Cancel a job
+```
 
 ### Code Style
-- Follow existing patterns in `protein_conformal/util.py`
+- Follow patterns in `protein_conformal/util.py`
 - Use numpy for numerical operations
-- Use FAISS for similarity search (not sklearn)
-
-### Notebooks
-- Notebooks are for analysis/visualization, not core logic
-- Core algorithms should be in `protein_conformal/`
-- Notebooks should import from the package, not duplicate code
-
-### Documentation
-- Update `REPO_ORGANIZATION.md` when adding new notebooks
-- Keep this log updated with timestamped entries
-- Document any deviations from paper methods
+- Use FAISS for similarity search
+- Notebooks for analysis, package for algorithms
