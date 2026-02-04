@@ -10,7 +10,7 @@ dependencies:
   - python=3.10
 
   # Core scientific computing
-  - numpy=1.26.*
+  - numpy>=1.24.0
   - pandas>=2.0.0
   - scipy>=1.10.0
   - scikit-learn>=1.0.0
@@ -19,7 +19,7 @@ dependencies:
   - pytorch>=2.1.0
   - cpuonly  # CPU-only PyTorch for Windows compatibility
   - transformers>=4.30.0
-  - pytorch-lightning>=2.0.0 
+  - pytorch-lightning>=2.0.0
   - h5py>=3.7.0
 
   # FAISS for similarity search
@@ -28,7 +28,7 @@ dependencies:
   # Bioinformatics
   - biopython>=1.81
 
-  # Web frameworks and APIs  
+  # Web frameworks and APIs
   - fastapi>=0.90.0
   - uvicorn>=0.18.0
   - jinja2>=3.1.0
@@ -54,22 +54,20 @@ dependencies:
   # Pip dependencies (packages not available via conda)
   - pip
   - pip:
-    - numpy<2.0
     - gradio>=4.0.0  # Install from PyPI with prebuilt frontend assets
     - py3Dmol>=1.8.0  # 3D molecular visualization for Gradio
     - sentencepiece>=0.1.99
-    - tensorboard
     - huggingface_hub>=0.34.0,<1.0
 
 # Installation instructions:
 # conda env update -f environment.yaml --prune  # Update existing 'cpr' environment
 # conda activate cpr
-# 
+#
 # Alternative: Create new environment
 # conda env create -f environment.yaml
 # conda activate protein-conformal
 #
 # For GPU support on Linux/properly configured CUDA systems:
-# 1. Replace 'cpuonly' with 'pytorch-cuda=11.8' 
+# 1. Replace 'cpuonly' with 'pytorch-cuda=11.8'
 # 2. Change 'faiss-cpu' to 'faiss-gpu'
 # 3. Add nvidia channel: conda install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
