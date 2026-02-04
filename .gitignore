@@ -211,5 +211,7 @@ test_clean_output/
 protein_vec_models.gz
 CLEAN_repo/
 
-# Archived legacy notebooks (moved from root dirs)
+# Archived legacy code (redundant/one-off scripts)
 notebooks_archive/
+scripts/archive/
+notebooks/*/archive/

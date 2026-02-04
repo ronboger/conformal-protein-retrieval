@@ -1,1 +1,2 @@
-﻿alpha,lambda_threshold,exact_fdr,partial_fdr
+alpha,threshold_mean,threshold_std,threshold_min,threshold_max,empirical_fdr_mean,empirical_fdr_std
+0.1,0.99998005881454,1.7455746588230029e-06,0.9999783761573561,0.9999823510044753,0.08709266350751729,0.011992918257283684
