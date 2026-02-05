@@ -968,240 +968,283 @@ def export_current_results(format_type: str) -> Tuple[Dict[str, Any], Optional[s
 def create_interface():
     """
     Create and configure the Gradio interface for protein conformal prediction
-    
+
     Returns:
         Gradio interface object
     """
-    with gr.Blocks(title="Protein Conformal Prediction") as interface:
-        gr.Markdown("# Protein Conformal Prediction")
-        
-        # Information section explaining the concepts
-        with gr.Accordion("About Conformal Prediction", open=False):
-            gr.Markdown("""
-            ## What is Conformal Prediction?
-            
-            Conformal prediction is a statistical framework that provides mathematically rigorous uncertainty quantification for any machine learning model. 
-            
-            In protein search, it allows us to control either:
-            
-            - **False Discovery Rate (FDR)**: The proportion of false positives among all positive predictions. 
-              - Formula: FDR = FP / (FP + TP)
-              - Controlling FDR ensures that among the proteins you identify as matches, only a small percentage are incorrect.
-              - Use FDR control when you want to minimize the chance of following up on false leads.
-            
-            - **False Negative Rate (FNR)**: The proportion of missed true positives among all actual positives.
-              - Formula: FNR = FN / (FN + TP)
-              - Controlling FNR ensures you don't miss too many true matches.
-              - Use FNR control when you want to ensure comprehensive coverage, even at the cost of including some false positives.
-            
-            ### How Conformal Risk Control Works
-            
-            This implementation uses the conformal risk–control framework from "Functional protein mining with conformal guarantees" (Boger et al., 2025). 
-            
-            The key idea is to choose the smallest similarity threshold λ̂ such that the empirical risk on a held-out calibration set 
-            does not exceed α (up to a small finite-sample correction):
-            
-            λ̂ = inf{λ: (1/n)∑ℓ(Xi,Cλ(Xi)) ≤ α - (1-α)/n}
-            
-            Where:
-            - α is your risk tolerance
-            - ℓ is the loss function (FDR or FNR)
-            - Cλ(X) is the retrieval set for threshold λ
-            
-            This formula guarantees that the expected risk E[ℓ(X,Cλ̂(X))] ≤ α under exchangeability.
-            
-            ### Probability Calibration
-            
-            In addition to thresholding, we use the Venn-Abers method with isotonic regression to transform similarity scores 
-            into calibrated probabilities, which can enrich interpretation of results.
-            
-            The Venn-Abers prediction method:
-            1. Takes a raw similarity score and adds it to the calibration data with both positive and negative labels
-            2. Fits isotonic regression models on both versions of the augmented dataset
-            3. Returns two probability estimates (p0, p1) that provide guaranteed bounds on the true probability
-            4. The average (p0+p1)/2 serves as our calibrated probability for downstream interpretation
-            
-            ### Calibration Data
-            
-            For this implementation, we use precomputed calibration probabilities stored in a CSV file with:
-            - Similarity scores between protein pairs
-            - Probability values for exact matches (prob_exact_p0, prob_exact_p1)
-            - Probability values for partial matches (prob_partial_p0, prob_partial_p1)
-            
-            All available calibration points are used automatically for every user query to provide the most reliable
-            statistical guarantees for either FDR or FNR metrics.
-            """)
-        
-        # Main interface
-        with gr.Row():
-            with gr.Column():
-                # Input section
-                gr.Markdown("## 1. Input Protein Sequences (FASTA format)")
-                
-                # FASTA input - always visible now
-                fasta_text = gr.TextArea(
-                    lines=6,
-                    label="Enter FASTA content",
-                    placeholder=">Protein1\nMKTVRQERLKSIVRILERSKEPVSGAQLAEELSVSRQVIVQDIAYLRSLGYNIVATPRGYVLAGG"
-                )
-                upload_file = gr.File(
-                    label="Or upload a FASTA file",
-                    file_types=[".fasta", ".fa", ".txt"]
-                )
-                
-                # Keep Protein-Vec enabled without exposing a UI toggle.
-                use_protein_vec = gr.State(value=True)
-                custom_embeddings_state = gr.State(value=None)
-            
-            with gr.Column():
-                # Conformal Parameters section
-                gr.Markdown("## 2. Conformal Parameters")
+    # Custom CSS for better styling
+    custom_css = """
+    .header-container {
+        text-align: center;
+        padding: 20px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        border-radius: 10px;
+        margin-bottom: 20px;
+    }
+    .header-title {
+        color: white;
+        font-size: 2.5em;
+        margin-bottom: 10px;
+    }
+    .header-subtitle {
+        color: rgba(255,255,255,0.9);
+        font-size: 1.1em;
+    }
+    .info-box {
+        background-color: #f0f7ff;
+        border-left: 4px solid #667eea;
+        padding: 15px;
+        margin: 10px 0;
+        border-radius: 0 8px 8px 0;
+    }
+    .warning-box {
+        background-color: #fff7e6;
+        border-left: 4px solid #faad14;
+        padding: 15px;
+        margin: 10px 0;
+        border-radius: 0 8px 8px 0;
+    }
+    .success-box {
+        background-color: #f6ffed;
+        border-left: 4px solid #52c41a;
+        padding: 15px;
+        margin: 10px 0;
+        border-radius: 0 8px 8px 0;
+    }
+    .parameter-card {
+        background: #fafafa;
+        padding: 15px;
+        border-radius: 8px;
+        border: 1px solid #e8e8e8;
+    }
+    """
+
+    with gr.Blocks(title="Conformal Protein Retrieval", css=custom_css, theme=gr.themes.Soft()) as interface:
+        # Header
+        gr.HTML("""
+        <div style="text-align: center; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; margin-bottom: 20px;">
+            <h1 style="color: white; font-size: 2.2em; margin-bottom: 5px;">Conformal Protein Retrieval</h1>
+            <p style="color: rgba(255,255,255,0.9); font-size: 1.1em; margin: 0;">
+                Functional protein mining with statistical guarantees
+            </p>
+            <p style="color: rgba(255,255,255,0.7); font-size: 0.9em; margin-top: 5px;">
+                Based on <a href="https://www.nature.com/articles/s41467-024-55676-y" target="_blank" style="color: #fff;">Boger et al., Nature Communications 2025</a>
+            </p>
+        </div>
+        """)
+
+        # Quick info box
+        gr.HTML("""
+        <div style="background-color: #f0f7ff; border-left: 4px solid #667eea; padding: 12px 15px; margin: 10px 0; border-radius: 0 8px 8px 0;">
+            <strong>How it works:</strong> Enter protein sequences, select your risk control type (FDR or FNR),
+            and get statistically guaranteed results with calibrated match probabilities.
+        </div>
+        """)
+
+        # Main interface with tabs
+        with gr.Tabs():
+            with gr.TabItem("Search"):
+                with gr.Row():
+                    # Left column - Input
+                    with gr.Column(scale=1):
+                        gr.Markdown("### Input Protein Sequences")
+
+                        fasta_text = gr.TextArea(
+                            lines=8,
+                            label="FASTA Content",
+                            placeholder=">sp|P00533|EGFR_HUMAN Epidermal growth factor receptor\nMRPSGTAGAALLALLAALCPASRALEEKKVCQGTSNKLTQLGTFEDHFLSLQRMFNNCEVVLGNLEITYVQRNYDLSFLKTIQEVAGYVLIALNTVERIPLE\n\n>sp|P04637|P53_HUMAN Cellular tumor antigen p53\nMEEPQSDPSVEPPLSQETFSDLWKLLPENNVLSPLPSQAMDDLMLSPDDIEQWFTEDPGP"
+                        )
+
+                        upload_file = gr.File(
+                            label="Or Upload FASTA File",
+                            file_types=[".fasta", ".fa", ".txt"]
+                        )
+
+                        # Example buttons
+                        gr.Markdown("**Quick Examples:**")
+                        with gr.Row():
+                            example_btn1 = gr.Button("EGFR", size="sm")
+                            example_btn2 = gr.Button("P53", size="sm")
+                            example_btn3 = gr.Button("Insulin", size="sm")
+
+                        use_protein_vec = gr.State(value=True)
+                        custom_embeddings_state = gr.State(value=None)
+
+                    # Right column - Parameters
+                    with gr.Column(scale=1):
+                        gr.Markdown("### Search Parameters")
+
+                        with gr.Group():
+                            risk_type = gr.Radio(
+                                ["FDR", "FNR"],
+                                label="Risk Control Type",
+                                value="FDR",
+                                info="FDR: Minimize false positives | FNR: Minimize missed matches"
+                            )
+
+                            risk_value = gr.Slider(
+                                minimum=0.001,
+                                maximum=0.2,
+                                value=0.1,
+                                step=0.001,
+                                label="Risk Level (α)",
+                                info="Lower = stricter threshold, fewer but more confident results"
+                            )
+
+                            match_type = gr.Radio(
+                                ["Exact", "Partial"],
+                                label="Match Type",
+                                value="Exact",
+                                info="Exact: All Pfam domains match | Partial: At least one matches"
+                            )
+
+                        # Calibrated thresholds info
+                        gr.HTML("""
+                        <div style="background-color: #fff7e6; border-left: 4px solid #faad14; padding: 10px 12px; margin: 10px 0; border-radius: 0 8px 8px 0; font-size: 0.9em;">
+                            <strong>Available thresholds:</strong><br>
+                            • FDR: α=0.1 only (paper-verified)<br>
+                            • FNR: α ∈ {0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2}
+                        </div>
+                        """)
+
+                        # Database options in accordion
+                        with gr.Accordion("Advanced Options", open=False):
+                            db_type = gr.Radio(
+                                ["UniProt", "SCOPE", "Custom"],
+                                label="Database",
+                                value="UniProt",
+                                info="Select lookup database"
+                            )
+
+                            max_results_slider = gr.Slider(
+                                minimum=100,
+                                maximum=5000,
+                                value=1000,
+                                step=100,
+                                label="Max Results (k)",
+                                info="Maximum neighbors per query"
+                            )
+
+                            custom_lookup_upload = gr.File(
+                                label="Custom Embeddings (.npy)",
+                                file_types=[".npy"],
+                                visible=False,
+                            )
+
+                            custom_metadata_upload = gr.File(
+                                label="Custom Metadata (.fasta/.tsv)",
+                                file_types=[".fasta", ".fa", ".tsv"],
+                                visible=False,
+                            )
+
+                        lookup_db_state = gr.State(value=DEFAULT_LOOKUP_EMBEDDING)
+                        metadata_db_state = gr.State(value=DEFAULT_LOOKUP_METADATA)
+
+                        # Submit button
+                        submit_btn = gr.Button("Search", variant="primary", size="lg")
+
+                # Results section
+                gr.Markdown("### Results")
+
+                with gr.Row():
+                    with gr.Column(scale=2):
+                        results_table = gr.Dataframe(
+                            label="Matches (click headers to sort)",
+                            wrap=True,
+                            interactive=True,
+                            height=400
+                        )
+
+                    with gr.Column(scale=1):
+                        results_summary = gr.JSON(label="Search Summary")
+
+                        with gr.Row():
+                            export_format = gr.Radio(
+                                ["csv", "json"],
+                                label="Export Format",
+                                value="csv",
+                                scale=2
+                            )
+                            export_btn = gr.Button("Export", size="sm", scale=1)
+
+                        export_status = gr.JSON(label="Export Status", visible=True)
+                        export_download = gr.File(label="Download", interactive=False)
+
+            with gr.TabItem("About"):
                 gr.Markdown("""
-                Select which statistical guarantee you want to control and your risk level alpha.
+                ## What is Conformal Prediction?
+
+                Conformal prediction provides **mathematically rigorous uncertainty quantification** for machine learning predictions.
+
+                ### Risk Control Types
+
+                | Type | Formula | Use When |
+                |------|---------|----------|
+                | **FDR** | FP / (FP + TP) | You want high precision - most retrieved results should be correct |
+                | **FNR** | FN / (FN + TP) | You want high recall - don't miss true matches |
+
+                ### How It Works
+
+                1. **Embedding**: Your protein sequences are converted to 512-dimensional vectors using Protein-Vec
+                2. **Search**: FAISS finds the k-nearest neighbors in the lookup database
+                3. **Thresholding**: Conformal prediction selects a similarity threshold λ̂ that guarantees:
+                   - E[Risk] ≤ α (your specified risk level)
+                4. **Calibration**: Venn-Abers provides calibrated probability estimates for each match
+
+                ### The Math
+
+                The threshold is chosen as:
+                ```
+                λ̂ = inf{λ: (1/n)∑ℓ(Xᵢ, Cλ(Xᵢ)) ≤ α - (1-α)/n}
+                ```
+
+                This guarantees that the expected risk E[ℓ(X, Cλ̂(X))] ≤ α under exchangeability.
+
+                ### Citation
+
+                ```bibtex
+                @article{boger2025functional,
+                  title={Functional protein mining with conformal guarantees},
+                  author={Boger, Ron S and Chithrananda, Seyone and Angelopoulos, Anastasios N
+                          and Yoon, Peter H and Jordan, Michael I and Doudna, Jennifer A},
+                  journal={Nature Communications},
+                  volume={16},
+                  pages={85},
+                  year={2025}
+                }
+                ```
                 """)
-                
-                risk_type = gr.Radio(
-                    ["FDR", "FNR"],
-                    label="Risk Type to Control",
-                    value="FDR",
-                    info="FDR: Controls false positives among results. FNR: Controls missed true matches."
-                )
 
-                gr.Markdown("""
-                **Available α values:**
-                - **FDR**: α=0.1 only (paper-verified threshold)
-                - **FNR**: α ∈ {0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2}
-                """)
+        # Example sequences
+        EXAMPLE_EGFR = """>sp|P00533|EGFR_HUMAN Epidermal growth factor receptor
+MRPSGTAGAALLALLAALCPASRALEEKKVCQGTSNKLTQLGTFEDHFLSLQRMFNNCEVVLGNLEITYVQRNYDLSFLKTIQEVAGYVLIALNTVERIPLE"""
 
-                risk_value = gr.Slider(
-                    minimum=0.001,
-                    maximum=0.2,
-                    value=0.1,
-                    step=0.001,
-                    label="Risk Level Alpha",
-                    info="For FDR, only α=0.1 is calibrated. For FNR, nearest available α will be used."
-                )
+        EXAMPLE_P53 = """>sp|P04637|P53_HUMAN Cellular tumor antigen p53
+MEEPQSDPSVEPPLSQETFSDLWKLLPENNVLSPLPSQAMDDLMLSPDDIEQWFTEDPGPDEAPRMPEAAPPVAPAPAAPTPAAPAPAPSWPLSSSVPSQ"""
 
-                match_type = gr.Radio(
-                    ["Exact", "Partial"],
-                    label="Match Type",
-                    value="Exact",
-                    info="Exact: All Pfam domains match. Partial: At least one Pfam domain matches."
-                )
-                
-                # Database selection
-                with gr.Accordion("Database Options", open=False):
-                    gr.Markdown("""
-                    ## Database Selection
-                    
-                    Select which pre-embedded database to search against:
-                    
-                    ### Available Databases:
-                    
-                    **UniProt** - A comprehensive collection of protein sequences and functional annotations. Provides broad coverage across diverse species and protein families.
-                    
-                    **SCOPE** - Structural Classification of Proteins database containing protein domains with known 3D structures. Useful for structural and functional studies.
-                    
-                    **Custom** - Upload your own database files. Requires two files:
-                    1. Embedding file (.npy): A NumPy array of protein embeddings
-                    2. Metadata file: Either a FASTA file (.fasta, .fa) or a tab-separated file (.tsv) with sequence metadata
-                    """)
-                    
-                    db_type = gr.Radio(
-                        ["UniProt", "SCOPE", "Custom"],
-                        label="Database Type",
-                        value="UniProt",
-                        info="Select which database to search against"
-                    )
+        EXAMPLE_INSULIN = """>sp|P01308|INS_HUMAN Insulin
+MALWMRLLPLLALLALWGPDPAAAFVNQHLCGSHLVEALYLVCGERGFFYTPKTRREAEDLQVGQVELGGGPGAGSLQPLALEGSLQKRGIVEQCCTSICSLYQLENYCN"""
 
-                    max_results_slider = gr.Slider(
-                        minimum=100,
-                        maximum=5000,
-                        value=1000,
-                        step=100,
-                        label="Max Retrieval Results (k)",
-                        info="Increase to return more nearest neighbors per query (higher values increase runtime)"
-                    )
-                    
-                    # Add custom file upload components (only for custom DB)
-                    custom_lookup_upload = gr.File(
-                        label="Upload Custom Embedding File (.npy)",
-                        file_types=[".npy"],
-                        visible=False,
-                    )
-                    
-                    custom_metadata_upload = gr.File(
-                        label="Upload Custom Metadata File (.fasta, .fa, or .tsv)",
-                        file_types=[".fasta", ".fa", ".tsv"],
-                        visible=False,
-                    )
+        # Example button handlers
+        def load_egfr():
+            return EXAMPLE_EGFR
+        def load_p53():
+            return EXAMPLE_P53
+        def load_insulin():
+            return EXAMPLE_INSULIN
 
-                lookup_db_state = gr.State(value=DEFAULT_LOOKUP_EMBEDDING)
-                metadata_db_state = gr.State(value=DEFAULT_LOOKUP_METADATA)
-                
-                # Submit button
-                submit_btn = gr.Button("Search", variant="primary")
-        
-        # Results section
-        gr.Markdown("## 3. Results")
-        with gr.Row():
-            with gr.Column():
-                # Conformal prediction summary
-                results_summary = gr.JSON(label="Conformal Prediction Results")
-                    
-                # Add a DataFrame for displaying results in a tabular format
-                # Note: Headers will be determined by the DataFrame columns
-                # For FASTA lookup: query_seq, query_meta, lookup_seq, D_score, prob_exact, lookup_meta
-                # For TSV lookup: query_seq, query_meta, lookup_seq, D_score, prob_exact, lookup_entry, lookup_pfam, lookup_protein_names
-                results_table = gr.Dataframe(
-                    label="Results Table (All Matches - Click Column Headers to Sort)",
-                    wrap=True,
-                    interactive=True  # Enable interactions like sorting
-                )
-                    
-        # Export results
-        with gr.Accordion("Export Results", open=False):
-            with gr.Row():
-                with gr.Column():
-                    export_format = gr.Radio(
-                        ["csv", "json"],
-                        label="Export Format",
-                        value="csv"
-                    )
-                    export_btn = gr.Button("Export Results")
-                    export_status = gr.JSON(label="Export Status")
-                    export_download = gr.File(
-                        label="Download Results",
-                        interactive=False
-                    )
-                    
-                    gr.Markdown("""
-                    ### Citation
-                    
-                    If you use this tool in your research, please cite:
-                    
-                    ```
-                    @article{boger2025functional,
-                    title={Functional protein mining with conformal guarantees},
-                    author={Boger, Ron S and Chithrananda, Seyone and Angelopoulos, Anastasios N and Yoon, Peter H and Jordan, Michael I and Doudna, Jennifer A},
-                    journal={Nature Communications},
-                    volume={16},
-                    number={1},
-                    pages={85},
-                    year={2025},
-                    publisher={Nature Publishing Group UK London}
-                    }
-                    ```
-                    """)
-        
+        example_btn1.click(fn=load_egfr, outputs=[fasta_text])
+        example_btn2.click(fn=load_p53, outputs=[fasta_text])
+        example_btn3.click(fn=load_insulin, outputs=[fasta_text])
+
         # Export functionality
         export_btn.click(
             fn=export_current_results,
             inputs=[export_format],
             outputs=[export_status, export_download]
         )
-        
-        # Main prediction submission - hardcode input_type as "fasta_format"
+
+        # Main prediction submission
         submit_btn.click(
             fn=lambda fasta, upload, risk_t, risk_v, max_k, use_pv, custom_emb, lookup, metadata, custom_lookup, custom_meta, m_type:
                 process_input("", fasta, upload, "fasta_format", risk_t, risk_v, max_k, use_pv, custom_emb, lookup, metadata, custom_lookup, custom_meta, m_type),
@@ -1214,7 +1257,7 @@ def create_interface():
             ],
             outputs=[results_summary, results_table]
         )
-        
+
         # Database selection event handler
         def update_database_selection(db_choice):
             if db_choice == "UniProt":
@@ -1238,7 +1281,7 @@ def create_interface():
                 gr.update(visible=True),
                 gr.update(visible=True),
             )
-        
+
         db_type.change(
             fn=update_database_selection,
             inputs=[db_type],
