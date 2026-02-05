@@ -742,20 +742,11 @@ def _process_input_impl(stage_timer: StageTimer,
                     logger.warning(f"Requested alpha={risk_value} not available. Using closest alpha={closest_alpha}")
             
         conformal_results = {
-            "message": f"Used precomputed threshold for {risk_description} control, alpha={closest_alpha}, match_type={match_type_label}" + (f" (requested α={risk_value})" if abs(closest_alpha - risk_value) > 0.001 else ""),
             "threshold": float(threshold),
             "risk_type": risk_type.lower(),
             "match_type": match_type_label,
-            "risk_description": risk_description,
-            "risk_formula": risk_formula,
-            "risk_explanation": risk_explanation,
             "empirical_risk": float(empirical_risk) if empirical_risk is not None else None,
-            "n_matches": 0,  # Will be updated after search
-            "match_rate": 0.0,  # Will be updated after search
-            "n_calib": len(threshold_df),
-            "match_info": [],  # Will be populated after search
-            "has_probability_calibration": True,  # Enable Venn-Abers probability calibration
-            "probability_calibration_method": "Venn-Abers prediction with isotonic regression"
+            "has_probability_calibration": True,
         }
 
         if "error" in conformal_results:
@@ -823,37 +814,41 @@ def _process_input_impl(stage_timer: StageTimer,
         results_df = pd.DataFrame(all_matches)
         
         with stage_timer.track("results_packaging"):
-            # 1. Create summary information for the JSON display
+            # 1. Create concise summary for display
+            alpha_note = f" (only α=0.1 calibrated)" if risk_type.lower() == "fdr" and abs(float(closest_alpha) - risk_value) > 0.001 else ""
             summary = {
-                "message": conformal_results["message"],
-                "database_used": database_type,
-                "num_matches": total_matches,
-                "threshold": conformal_results["threshold"],
-                "max_results_requested": max_results,
-                "risk_type": conformal_results["risk_type"],
-                "risk_description": conformal_results["risk_description"],
-                "risk_formula": conformal_results["risk_formula"], 
-                "risk_explanation": conformal_results["risk_explanation"],
-                "empirical_risk": conformal_results["empirical_risk"],
-                "n_calib": conformal_results["n_calib"],
-                "match_rate": conformal_results["match_rate"],
+                "status": "success",
+                "matches_found": total_matches,
+                "risk_control": {
+                    "type": conformal_results["risk_type"].upper(),
+                    "alpha_used": float(closest_alpha),
+                    "alpha_requested": risk_value,
+                    "threshold": round(conformal_results["threshold"], 10),
+                    "empirical_risk": round(conformal_results["empirical_risk"], 4) if conformal_results["empirical_risk"] else None,
+                },
+                "search_config": {
+                    "database": database_type,
+                    "match_type": conformal_results["match_type"],
+                    "max_k": max_results,
+                },
+                "note": alpha_note.strip() if alpha_note.strip() else None,
             }
-            
-            # 2. Complete results for the raw JSON output
+            # Remove None values for cleaner output
+            summary = {k: v for k, v in summary.items() if v is not None}
+            if summary.get("note") is None:
+                summary.pop("note", None)
+
+            # 2. Complete results for export
             complete_results = {
-                "conformal_prediction": conformal_results,
-                "database_used": database_type,
-                "num_matches": total_matches,
-                "max_results_requested": max_results,
-                "matches": all_matches,  # Include all matches
+                "summary": summary,
+                "matches": all_matches,
                 "threshold": conformal_results["threshold"],
                 "risk_type": conformal_results["risk_type"],
-                "risk_description": conformal_results["risk_description"],
-                "risk_explanation": conformal_results["risk_explanation"],
+                "match_type": conformal_results["match_type"],
                 "empirical_risk": conformal_results["empirical_risk"]
             }
-            
-            # Store in session for potential later use - include ALL matches for export
+
+            # Store in session for export
             global CURRENT_SESSION
             CURRENT_SESSION = {
                 "results": complete_results,
@@ -862,8 +857,6 @@ def _process_input_impl(stage_timer: StageTimer,
                     "risk_value": risk_value,
                     "max_results": max_results,
                     "database_type": database_type,
-                    "input_type": "fasta_format",  # Always FASTA now
-                    "n_calib": conformal_results["n_calib"]
                 }
             }
         
