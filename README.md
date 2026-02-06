@@ -1,3 +1,16 @@
+---
+title: Conformal Protein Retrieval
+emoji: 🧬
+colorFrom: purple
+colorTo: blue
+sdk: gradio
+sdk_version: 5.9.1
+app_file: app.py
+pinned: false
+license: mit
+short_description: Functional protein mining with statistical guarantees
+---
+
 # Conformal Protein Retrieval
 
 Code and notebooks from [Functional protein mining with conformal guarantees](https://www.nature.com/articles/s41467-024-55676-y) (Nature Communications, 2025). This package provides statistically rigorous methods for protein database search with false discovery rate (FDR) and false negative rate (FNR) control.
