@@ -196,7 +196,8 @@ except ImportError:
 
 ### Gradio 4.x/5.x Breaking Changes
 - `gr.Dataframe(height=...)` removed - don't use height parameter
-- `gr.update()` removed in Gradio 5.x - use component constructors instead (e.g. `gr.File(visible=False)` not `gr.update(visible=False)`). Causes "No API found" error on HF Spaces.
+- `gr.update()` removed in Gradio 5.x - use component constructors instead (e.g. `gr.File(visible=False)` not `gr.update(visible=False)`)
+- **`gr.JSON` crashes on Python 3.13 / HF Spaces** - `gradio_client` can't handle `additionalProperties: true` (boolean) in JSON Schema. Causes `TypeError: argument of type 'bool' is not iterable` in `get_api_info()`, breaking ALL event handlers with "No API found". **Fix**: use `gr.Code(language="json")` instead and serialize dicts with `json.dumps()`.
 - Use `gr.themes.Soft()` instead of custom CSS where possible
 - Test locally with same Gradio version as HF Spaces
 

@@ -541,7 +541,7 @@ def process_input(input_text: str,
                   custom_lookup_upload: Optional[Any] = None,
                   custom_metadata_upload: Optional[Any] = None,
                   match_type: str = "Exact",
-                  progress=gr.Progress()) -> Tuple[Dict[str, Any], pd.DataFrame]:
+                  progress=gr.Progress()) -> Tuple[str, pd.DataFrame]:
     """Wrapper that instruments the main pipeline with timing information."""
     stage_timer = StageTimer()
     try:
@@ -897,7 +897,7 @@ def _process_input_impl(stage_timer: StageTimer,
         error_message = {"error": f"Error during search: {str(e)}"}
         return error_message, pd.DataFrame()
 
-def export_current_results(format_type: str) -> Tuple[Dict[str, Any], Optional[str]]:
+def export_current_results(format_type: str) -> Tuple[str, Optional[str]]:
     """
     Export the current results in the specified format.
     All matches (not just displayed ones) will be included in the export.
@@ -906,7 +906,7 @@ def export_current_results(format_type: str) -> Tuple[Dict[str, Any], Optional[s
         format_type: Format to export (csv, json)
         
     Returns:
-        Tuple of (status dict, file path for download)
+        Tuple of (status JSON string, file path for download)
     """
     global CURRENT_SESSION
 
