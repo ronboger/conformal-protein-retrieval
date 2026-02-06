@@ -21,10 +21,12 @@ plotly>=5.9.0
 # HuggingFace integration (for downloading assets)
 huggingface_hub>=0.20.0
 
+# Visualization (required by embed_protein_vec.py)
+seaborn>=0.12.0
+
 # Optional visualization dependencies (for visualization.py if used)
 # py3Dmol>=1.8.0
 # networkx>=2.8.0
-# seaborn>=0.12.0
 
 # Optional API dependencies (for collaborative.py if used)
 # fastapi>=0.90.0
