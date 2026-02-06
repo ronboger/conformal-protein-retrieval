@@ -12,6 +12,7 @@ transformers>=4.30.0
 
 # Gradio UI
 gradio>=4.0.0
+pydantic==2.10.6  # Pin: pydantic 2.11+ breaks gradio_client API schema generation
 
 # Visualization (required by gradio_interface)
 matplotlib>=3.5.0
