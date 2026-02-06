@@ -8,14 +8,23 @@ biopython>=1.81
 # ML/Embeddings
 torch>=2.0.0
 faiss-cpu>=1.7.4
+transformers>=4.30.0
 
 # Gradio UI
 gradio>=4.0.0
 
-# Visualization
+# Visualization (required by gradio_interface)
 matplotlib>=3.5.0
 plotly>=5.9.0
 
-# HuggingFace integration
+# HuggingFace integration (for downloading assets)
 huggingface_hub>=0.20.0
-transformers>=4.30.0
+
+# Optional visualization dependencies (for visualization.py if used)
+# py3Dmol>=1.8.0
+# networkx>=2.8.0
+# seaborn>=0.12.0
+
+# Optional API dependencies (for collaborative.py if used)
+# fastapi>=0.90.0
+# uvicorn>=0.18.0
