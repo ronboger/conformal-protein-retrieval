@@ -7,6 +7,7 @@ and perform conformal prediction with statistical guarantees.
 """
 
 import gradio as gr
+import json
 import numpy as np
 import os
 import sys
@@ -544,7 +545,7 @@ def process_input(input_text: str,
     """Wrapper that instruments the main pipeline with timing information."""
     stage_timer = StageTimer()
     try:
-        return _process_input_impl(
+        summary, df = _process_input_impl(
             stage_timer,
             input_text,
             fasta_text,
@@ -562,6 +563,7 @@ def process_input(input_text: str,
             match_type,
             progress,
         )
+        return json.dumps(summary, indent=2, default=str), df
     finally:
         stage_timer.log_summary()
 
@@ -907,14 +909,14 @@ def export_current_results(format_type: str) -> Tuple[Dict[str, Any], Optional[s
         Tuple of (status dict, file path for download)
     """
     global CURRENT_SESSION
-    
+
     if not CURRENT_SESSION or "results" not in CURRENT_SESSION:
-        return {"error": "No results to export"}, None
-    
+        return json.dumps({"error": "No results to export"}, indent=2), None
+
     try:
         # Create a directory for exported reports if it doesn't exist
         os.makedirs("exported_reports", exist_ok=True)
-        
+
         # Create a unique filename
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -927,36 +929,34 @@ def export_current_results(format_type: str) -> Tuple[Dict[str, Any], Optional[s
             "exported_reports",
             f"results_{timestamp}_{risk_type}_{threshold_tag}.{format_type}",
         )
-        
+
         # Export the results
         if format_type == "csv":
             if "matches" in CURRENT_SESSION["results"]:
-                import pandas as pd
                 # Export ALL matches, not just the displayed ones
                 df = pd.DataFrame(CURRENT_SESSION["results"]["matches"])
                 df.to_csv(file_path, index=False)
                 total_exported = len(df)
             else:
-                return {"error": "No matches to export"}, None
+                return json.dumps({"error": "No matches to export"}, indent=2), None
         elif format_type == "json":
             with open(file_path, 'w') as f:
-                import json
                 # For JSON export, we include the full result structure
                 json.dump(CURRENT_SESSION["results"], f, indent=2)
                 total_exported = CURRENT_SESSION["results"]["num_matches"]
         else:
-            return {"error": f"Unsupported format: {format_type}"}, None
-        
-        return {
+            return json.dumps({"error": f"Unsupported format: {format_type}"}, indent=2), None
+
+        return json.dumps({
             "success": True,
             "message": f"Results exported as {file_path} ({total_exported} records)",
             "file_path": file_path
-        }, file_path
-    
+        }, indent=2), file_path
+
     except Exception as e:
-        return {
+        return json.dumps({
             "error": f"Error exporting results: {str(e)}"
-        }, None
+        }, indent=2), None
 
 def create_interface():
     """
@@ -1148,7 +1148,7 @@ def create_interface():
                         )
 
                     with gr.Column(scale=1):
-                        results_summary = gr.JSON(label="Search Summary")
+                        results_summary = gr.Code(language="json", label="Search Summary", interactive=False)
 
                         with gr.Row():
                             export_format = gr.Radio(
@@ -1159,7 +1159,7 @@ def create_interface():
                             )
                             export_btn = gr.Button("Export", size="sm", scale=1)
 
-                        export_status = gr.JSON(label="Export Status", visible=True)
+                        export_status = gr.Code(language="json", label="Export Status", interactive=False)
                         export_download = gr.File(label="Download", interactive=False)
 
             with gr.TabItem("About"):
