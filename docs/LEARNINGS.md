@@ -194,8 +194,9 @@ except ImportError:
     create_structure_with_heatmap = None
 ```
 
-### Gradio 4.x Breaking Changes
+### Gradio 4.x/5.x Breaking Changes
 - `gr.Dataframe(height=...)` removed - don't use height parameter
+- `gr.update()` removed in Gradio 5.x - use component constructors instead (e.g. `gr.File(visible=False)` not `gr.update(visible=False)`). Causes "No API found" error on HF Spaces.
 - Use `gr.themes.Soft()` instead of custom CSS where possible
 - Test locally with same Gradio version as HF Spaces
 

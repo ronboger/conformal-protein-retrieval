@@ -1256,22 +1256,22 @@ MALWMRLLPLLALLALWGPDPAAAFVNQHLCGSHLVEALYLVCGERGFFYTPKTRREAEDLQVGQVELGGGPGAGSLQPL
                 return (
                     DEFAULT_LOOKUP_EMBEDDING,
                     DEFAULT_LOOKUP_METADATA,
-                    gr.update(value=None, visible=False),
-                    gr.update(value=None, visible=False),
+                    gr.File(value=None, visible=False),
+                    gr.File(value=None, visible=False),
                 )
             if db_choice == "SCOPE":
                 return (
                     DEFAULT_SCOPE_EMBEDDING,
                     DEFAULT_SCOPE_METADATA,
-                    gr.update(value=None, visible=False),
-                    gr.update(value=None, visible=False),
+                    gr.File(value=None, visible=False),
+                    gr.File(value=None, visible=False),
                 )
             # Custom database
             return (
                 CUSTOM_UPLOAD_EMBEDDING,
                 CUSTOM_UPLOAD_METADATA,
-                gr.update(visible=True),
-                gr.update(visible=True),
+                gr.File(visible=True),
+                gr.File(visible=True),
             )
 
         db_type.change(
