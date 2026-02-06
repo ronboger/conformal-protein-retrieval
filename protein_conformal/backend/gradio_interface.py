@@ -1144,8 +1144,7 @@ def create_interface():
                         results_table = gr.Dataframe(
                             label="Matches (click headers to sort)",
                             wrap=True,
-                            interactive=True,
-                            height=400
+                            interactive=True
                         )
 
                     with gr.Column(scale=1):
