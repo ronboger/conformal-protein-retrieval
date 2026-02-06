@@ -178,6 +178,34 @@ pytest tests/ --cov=protein_conformal --cov-report=html  # With coverage
 
 ---
 
+## HuggingFace Spaces Deployment
+
+### Key Lesson: Optional Imports
+When deploying to HuggingFace Spaces, **wrap optional module imports in try/except**. The Space only installs what's in `requirements.txt`, so unused modules with extra dependencies will crash the app on import.
+
+```python
+# Bad - crashes if py3Dmol not installed
+from .visualization import create_structure_with_heatmap
+
+# Good - gracefully handles missing deps
+try:
+    from .visualization import create_structure_with_heatmap
+except ImportError:
+    create_structure_with_heatmap = None
+```
+
+### Requirements.txt Best Practices
+1. Include ALL imports used by the main app path
+2. Comment out optional deps with clear notes
+3. Test locally with a fresh venv before pushing
+
+### Dataset Integration
+- Set `HF_DATASET_ID` env variable in Space settings
+- Dataset structure must match paths in `app.py` `ensure_assets()`
+- Files downloaded on first run, then cached
+
+---
+
 ## Session History
 
 ### 2026-02-05 (Gradio branch)
