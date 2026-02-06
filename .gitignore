@@ -21,7 +21,9 @@ data/inputs/
 data/lookup_embeddings_meta_data.tsv
 exported_reports/
 inter_results/
-results/
+# results/ - allow CSV files for HuggingFace deployment
+results/*
+!results/*.csv
 saved_sessions/
 protein_vec_models/
 scripts/debug_data.py

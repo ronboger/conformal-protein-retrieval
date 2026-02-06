@@ -1,27 +1,24 @@
-# Core dependencies
+# Core dependencies for HuggingFace Spaces
 numpy>=1.24.0
-torch>=2.0.0
-gradio>=3.50.0
-biopython>=1.81
-transformers>=4.30.0
-fair-esm>=2.0.0  # Required for CLEAN embedding (ESM-1b)
-requests>=2.27.1
 pandas>=2.0.0
 scipy>=1.10.0
-faiss-cpu>=1.7.4  # or faiss-gpu if using GPU
-huggingface_hub>=0.34.0,<1.0  # transformers requires <1.0 in this app
+scikit-learn>=1.0.0
+biopython>=1.81
 
-# Visualization dependencies
-py3Dmol>=1.8.0
+# ML/Embeddings
+torch>=2.0.0
+faiss-cpu>=1.7.4
+
+# Gradio UI
+gradio>=4.0.0
+
+# Visualization
+matplotlib>=3.5.0
 plotly>=5.9.0
-networkx>=2.8.0
-matplotlib>=3.5.0  # For visualization
-seaborn>=0.12.0
-scikit-learn>=1.0.0  # For machine learning utilities
 
-# Collaborative features dependencies
-fastapi>=0.90.0
-uvicorn>=0.18.0
-jinja2>=3.1.0
-pydantic>=1.10.0
-python-multipart>=0.0.5
+# HuggingFace integration (for downloading assets)
+huggingface_hub>=0.20.0
+
+# Optional: uncomment if CLEAN/ESM embedding is needed
+# transformers>=4.30.0
+# fair-esm>=2.0.0
