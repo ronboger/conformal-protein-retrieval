@@ -16,9 +16,6 @@ gradio>=4.0.0
 matplotlib>=3.5.0
 plotly>=5.9.0
 
-# HuggingFace integration (for downloading assets)
+# HuggingFace integration
 huggingface_hub>=0.20.0
-
-# Optional: uncomment if CLEAN/ESM embedding is needed
-# transformers>=4.30.0
-# fair-esm>=2.0.0
+transformers>=4.30.0
