@@ -194,6 +194,11 @@ except ImportError:
     create_structure_with_heatmap = None
 ```
 
+### Gradio 4.x Breaking Changes
+- `gr.Dataframe(height=...)` removed - don't use height parameter
+- Use `gr.themes.Soft()` instead of custom CSS where possible
+- Test locally with same Gradio version as HF Spaces
+
 ### Requirements.txt Best Practices
 1. Include ALL imports used by the main app path
 2. Comment out optional deps with clear notes
