@@ -274,7 +274,7 @@ def ui():
         result = embedder.embed.remote(sequences)
         if progress:
             progress(0.9, desc="Embeddings received from GPU!")
-        return np.array(result)
+        return np.array(result, dtype=np.float32)
 
     gi.run_embed_protein_vec = gpu_embed
 

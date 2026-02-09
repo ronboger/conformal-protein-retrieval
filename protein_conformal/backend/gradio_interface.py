@@ -1018,7 +1018,7 @@ def create_interface():
                         fasta_text = gr.TextArea(
                             lines=8,
                             label="FASTA Content",
-                            placeholder=">sp|P00533|EGFR_HUMAN Epidermal growth factor receptor\nMRPSGTAGAALLALLAALCPASRALEEKKVCQGTSNKLTQLGTFEDHFLSLQRMFNNCEVVLGNLEITYVQRNYDLSFLKTIQEVAGYVLIALNTVERIPLE\n\n>sp|P04637|P53_HUMAN Cellular tumor antigen p53\nMEEPQSDPSVEPPLSQETFSDLWKLLPENNVLSPLPSQAMDDLMLSPDDIEQWFTEDPGP"
+                            placeholder=">sp|P0A7G6|RECA_ECOLI Protein RecA OS=Escherichia coli (strain K12) GN=recA\nMAIDENKQKALAAALGQIEKQFGKGSIMRLGEDRSMDVETISTGSLSLDIALGAGGLPMGRIVEIYGPESSGKTTLTLQVIAAAQREGKTCAFIDAEHALDPIYARKLGVDIDNLLCSQPDTGEQALEICDALARSGAVDVIVVDSVAALTPKAEIEGEIGDSHMGLAARMMSQAMRKLAGNLKQSNTLLIFINQIRMKIGVM..."
                         )
 
                         upload_file = gr.File(
@@ -1029,8 +1029,8 @@ def create_interface():
                         # Example buttons
                         gr.Markdown("**Quick Examples:**")
                         with gr.Row():
-                            example_btn1 = gr.Button("EGFR", size="sm")
-                            example_btn2 = gr.Button("P53", size="sm")
+                            example_btn1 = gr.Button("RecA", size="sm")
+                            example_btn2 = gr.Button("CoxA", size="sm")
                             example_btn3 = gr.Button("Insulin", size="sm")
 
                         use_protein_vec = gr.State(value=True)
@@ -1181,25 +1181,25 @@ def create_interface():
                 """)
 
         # Example sequences
-        EXAMPLE_EGFR = """>sp|P00533|EGFR_HUMAN Epidermal growth factor receptor
-MRPSGTAGAALLALLAALCPASRALEEKKVCQGTSNKLTQLGTFEDHFLSLQRMFNNCEVVLGNLEITYVQRNYDLSFLKTIQEVAGYVLIALNTVERIPLE"""
+        EXAMPLE_RECA = """>sp|P0A7G6|RECA_ECOLI Protein RecA OS=Escherichia coli (strain K12) GN=recA
+MAIDENKQKALAAALGQIEKQFGKGSIMRLGEDRSMDVETISTGSLSLDIALGAGGLPMGRIVEIYGPESSGKTTLTLQVIAAAQREGKTCAFIDAEHALDPIYARKLGVDIDNLLCSQPDTGEQALEICDALARSGAVDVIVVDSVAALTPKAEIEGEIGDSHMGLAARMMSQAMRKLAGNLKQSNTLLIFINQIRMKIGVMFGNPETTTGGNALKFYASVRLDIRRIGAVKEGENVVGSETRVKVVKNKIAAPFKQAEFQILYGEGINFYGELVDLGVKEKLIEKAGAWYSYKGEKIGQGKANATAWLKDNPETAKEIEKKVRELLLSNPNSTPDFSVDDSEGVAETNEDF"""
 
-        EXAMPLE_P53 = """>sp|P04637|P53_HUMAN Cellular tumor antigen p53
-MEEPQSDPSVEPPLSQETFSDLWKLLPENNVLSPLPSQAMDDLMLSPDDIEQWFTEDPGPDEAPRMPEAAPPVAPAPAAPTPAAPAPAPSWPLSSSVPSQ"""
+        EXAMPLE_COX1 = """>sp|P0AFC7|COX1_ECOLI Cytochrome c oxidase subunit I OS=Escherichia coli (strain K12) GN=coxA
+MFQLMPLDLIILLAACAGVSFGTKYENVGSIYSAFPLMIAGFNPSGPIILAVAGLGLTAISSLLRDLPNRLSTLPVGGYGVVLGLLGAGISGAAVDMAAARTAYTIVGNAGGVSYISPPPNGTPVINVVQIMTDTANRRQLKKKNQLGHAFSPQLLGRSLALMGTSFGDVWMTAVGAGMAYFSTSGLAMGITTGLSVSFGGGDPEFMARYLLVTLGLGSAFGQFIWNGSMLAGITALGWLSYASSVAGGGMAMGIGLAGASTGLMEQPLVSRLGVIVGGVILGAGISSTTNSFPIQIKEFLQQSMGTVVQGSIVGRNQDINGIVIPGCFGLSFPCFIGGVAMAGMYGSLMIFPDTKDGKAFPLKYPLAFVMSAFLVIMAMGGTGPQF"""
 
         EXAMPLE_INSULIN = """>sp|P01308|INS_HUMAN Insulin
 MALWMRLLPLLALLALWGPDPAAAFVNQHLCGSHLVEALYLVCGERGFFYTPKTRREAEDLQVGQVELGGGPGAGSLQPLALEGSLQKRGIVEQCCTSICSLYQLENYCN"""
 
         # Example button handlers
-        def load_egfr():
-            return EXAMPLE_EGFR
-        def load_p53():
-            return EXAMPLE_P53
+        def load_reca():
+            return EXAMPLE_RECA
+        def load_cox1():
+            return EXAMPLE_COX1
         def load_insulin():
             return EXAMPLE_INSULIN
 
-        example_btn1.click(fn=load_egfr, outputs=[fasta_text])
-        example_btn2.click(fn=load_p53, outputs=[fasta_text])
+        example_btn1.click(fn=load_reca, outputs=[fasta_text])
+        example_btn2.click(fn=load_cox1, outputs=[fasta_text])
         example_btn3.click(fn=load_insulin, outputs=[fasta_text])
 
         # Export functionality
