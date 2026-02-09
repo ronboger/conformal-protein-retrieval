@@ -967,48 +967,21 @@ def create_interface():
     """
     # Custom CSS for better styling
     custom_css = """
-    .header-container {
-        text-align: center;
-        padding: 20px;
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+    .gradio-container {
+        font-family: 'Inter', sans-serif !important;
+    }
+
+    /* Section headers (### headings) — blue gradient pill */
+    .prose h3, .md h3 {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        border-radius: 10px;
-        margin-bottom: 20px;
-    }
-    .header-title {
-        color: white;
-        font-size: 2.5em;
-        margin-bottom: 10px;
-    }
-    .header-subtitle {
-        color: rgba(255,255,255,0.9);
-        font-size: 1.1em;
-    }
-    .info-box {
-        background-color: #f0f7ff;
-        border-left: 4px solid #667eea;
-        padding: 15px;
-        margin: 10px 0;
-        border-radius: 0 8px 8px 0;
-    }
-    .warning-box {
-        background-color: #fff7e6;
-        border-left: 4px solid #faad14;
-        padding: 15px;
-        margin: 10px 0;
-        border-radius: 0 8px 8px 0;
-    }
-    .success-box {
-        background-color: #f6ffed;
-        border-left: 4px solid #52c41a;
-        padding: 15px;
-        margin: 10px 0;
-        border-radius: 0 8px 8px 0;
-    }
-    .parameter-card {
-        background: #fafafa;
-        padding: 15px;
+        color: white !important;
+        padding: 10px 18px;
         border-radius: 8px;
-        border: 1px solid #e8e8e8;
+        margin: 16px 0 12px 0;
+        font-size: 1.1em;
+        font-weight: 600;
     }
     """
 
@@ -1028,7 +1001,7 @@ def create_interface():
 
         # Quick info box
         gr.HTML("""
-        <div style="background-color: #f0f7ff; border-left: 4px solid #667eea; padding: 12px 15px; margin: 10px 0; border-radius: 0 8px 8px 0;">
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 14px 18px; margin: 10px 0; border-radius: 8px; color: white;">
             <strong>How it works:</strong> Enter protein sequences, select your risk control type (FDR or FNR),
             and get statistically guaranteed results with calibrated match probabilities.
         </div>
@@ -1093,7 +1066,7 @@ def create_interface():
 
                         # Calibrated thresholds info
                         gr.HTML("""
-                        <div style="background-color: #fff7e6; border-left: 4px solid #faad14; padding: 10px 12px; margin: 10px 0; border-radius: 0 8px 8px 0; font-size: 0.9em;">
+                        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 12px 16px; margin: 10px 0; border-radius: 8px; font-size: 0.9em; color: white;">
                             <strong>Available thresholds:</strong><br>
                             • FDR: α=0.1 only (paper-verified)<br>
                             • FNR: α ∈ {0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2}
