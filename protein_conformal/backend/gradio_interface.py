@@ -608,6 +608,9 @@ def _process_input_impl(stage_timer: StageTimer,
         - Table data (for the DataFrame display)
         - Complete results (for the raw JSON output)
     """
+    # Ensure risk_value is numeric (Dropdown may return a string)
+    risk_value = float(risk_value)
+
     # Step 1: Get sequences and metadata from FASTA input
     with stage_timer.track("parse_input"):
         sequences = []
@@ -1002,8 +1005,8 @@ def create_interface():
         # Quick info box
         gr.HTML("""
         <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 14px 18px; margin: 10px 0; border-radius: 8px; color: white;">
-            <strong>How it works:</strong> Enter protein sequences, select your risk control type (FDR or FNR),
-            and get statistically guaranteed results with calibrated match probabilities.
+            <strong>How it works:</strong> Enter protein sequences in FASTA format, choose FDR or FNR risk control,
+            and retrieve functionally similar proteins from UniProt with provable error-rate guarantees.
         </div>
         """)
 
@@ -1018,7 +1021,8 @@ def create_interface():
                         fasta_text = gr.TextArea(
                             lines=8,
                             label="FASTA Content",
-                            placeholder=">sp|P0A7G6|RECA_ECOLI Protein RecA OS=Escherichia coli (strain K12) GN=recA\nMAIDENKQKALAAALGQIEKQFGKGSIMRLGEDRSMDVETISTGSLSLDIALGAGGLPMGRIVEIYGPESSGKTTLTLQVIAAAQREGKTCAFIDAEHALDPIYARKLGVDIDNLLCSQPDTGEQALEICDALARSGAVDVIVVDSVAALTPKAEIEGEIGDSHMGLAARMMSQAMRKLAGNLKQSNTLLIFINQIRMKIGVM..."
+                            value=""">sp|Q99ZW2|CAS9_STRP1 CRISPR-associated endonuclease Cas9 OS=Streptococcus pyogenes serotype M1 GN=cas9
+MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRICYLQEIFSNEMAKVDDSFFHRLEESFLVEEDKKHERHPIFGNIVDEVAYHEKYPTIYHLRKKLVDSTDKADLRLIYLALAHMIKFRGHFLIEGDLNPDNSDVDKLFIQLVQTYNQLFEENPINASGVDAKAILSARLSKSRRLENLIAQLPGEKKNGLFGNLIALSLGLTPNFKSNFDLAEDAKLQLSKDTYDDDLDNLLAQIGDQYADLFLAAKNLSDAILLSDILRVNTEITKAPLSASMIKRYDEHHQDLTLLKALVRQQLPEKYKEIFFDQSKNGYAGYIDGGASQEEFYKFIKPILEKMDGTEELLVKLNREDLLRKQRTFDNGSIPHQIHLGELHAILRRQEDFYPFLKDNREKIEKILTFRIPYYVGPLARGNSRFAWMTRKSEETITPWNFEEVVDKGASAQSFIERMTNFDKNLPNEKVLPKHSLLYEYFTVYNELTKVKYVTEGMRKPAFLSGEQKKAIVDLLFKTNRKVTVKQLKEDYFKKIECFDSVEISGVEDRFNASLGTYHDLLKIIKDKDFLDNEENEDILEDIVLTLTLFEDREMIEERLKTYAHLFDDKVMKQLKRRRYTGWGRLSRKLINGIRDKQSGKTILDFLKSDGFANRNFMQLIHDDSLTFKEDIQKAQVSGQGDSLHEHIANLAGSPAIKKGILQTVKVVDELVKVMGRHKPENIVIEMARENQTTQKGQKNSRERMKRIEEGIKELGSQILKEHPVENTQLQNEKLYLYYLQNGRDMYVDQELDINRLSDYDVDHIVPQSFLKDDSIDNKVLTRSDKNRGKSDNVPSEEVVKKMKNYWRQLLNAKLITQRKFDNLTKAERGGLSELDKAGFIKRQLVETRQITKHVAQILDSRMNTKYDENDKLIREVKVITLKSKLVSDFRKDFQFYKVREINNYHHAHDAYLNAVVGTALIKKYPKLESEFVYGDYKVYDVRKMIAKSEQEIGKATAKYFFYSNIMNFFKTEITLANGEIRKRPLIETNGETGEIVWDKGRDFATVRKVLSMPQVNIVKKTEVQTGGFSKESILPKRNSDKLIARKKDWDPKKYGGFDSPTVAYSVLVVAKVEKGKSKKLKSVKELLGITIMERSSFEKNPIDFLEAKGYKEVKKDLIIKLPKYSLFELENGRKRMLASAGELQKGNELALPSKYVNFLYLASHYEKLKGSPEDNEQKQLFVEQHKHYLDEIIEQISEFSKRVILADANLDKVLSAYNKHRDKPIREQAENIIHLFTLTNLGAPAAFKYFDTTIDRKRYTSTKEVLDATLIHQSITGLYETRIDLSQLGGD""",
                         )
 
                         upload_file = gr.File(
@@ -1029,9 +1033,11 @@ def create_interface():
                         # Example buttons
                         gr.Markdown("**Quick Examples:**")
                         with gr.Row():
-                            example_btn1 = gr.Button("RecA", size="sm")
-                            example_btn2 = gr.Button("CoxA", size="sm")
-                            example_btn3 = gr.Button("Insulin", size="sm")
+                            example_btn_cas9 = gr.Button("Cas9", size="sm")
+                            example_btn_reca = gr.Button("RecA", size="sm")
+                            example_btn_cox1 = gr.Button("CoxA", size="sm")
+                            example_btn_insulin = gr.Button("Insulin", size="sm")
+                            example_btn_syn30 = gr.Button("Syn3.0", size="sm")
 
                         use_protein_vec = gr.State(value=True)
                         custom_embeddings_state = gr.State(value=None)
@@ -1048,11 +1054,12 @@ def create_interface():
                                 info="FDR: Minimize false positives | FNR: Minimize missed matches"
                             )
 
-                            risk_value = gr.Slider(
-                                minimum=0.001,
-                                maximum=0.2,
+                            FDR_ALPHAS = [0.1]
+                            FNR_ALPHAS = [0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2]
+
+                            risk_value = gr.Dropdown(
+                                choices=FDR_ALPHAS,
                                 value=0.1,
-                                step=0.001,
                                 label="Risk Level (α)",
                                 info="Lower = stricter threshold, fewer but more confident results"
                             )
@@ -1063,15 +1070,6 @@ def create_interface():
                                 value="Exact",
                                 info="Exact: All Pfam domains match | Partial: At least one matches"
                             )
-
-                        # Calibrated thresholds info
-                        gr.HTML("""
-                        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 12px 16px; margin: 10px 0; border-radius: 8px; font-size: 0.9em; color: white;">
-                            <strong>Available thresholds:</strong><br>
-                            • FDR: α=0.1 only (paper-verified)<br>
-                            • FNR: α ∈ {0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2}
-                        </div>
-                        """)
 
                         # Database options in accordion
                         with gr.Accordion("Advanced Options", open=False):
@@ -1137,33 +1135,30 @@ def create_interface():
 
             with gr.TabItem("About"):
                 gr.Markdown("""
-                ## What is Conformal Prediction?
+                ## Conformal Protein Retrieval
 
-                Conformal prediction provides **mathematically rigorous uncertainty quantification** for machine learning predictions.
+                This tool searches for functionally similar proteins with **provable error-rate guarantees**
+                using conformal prediction. Given a query protein, it retrieves matches from UniProt (or a custom database)
+                and controls either the false discovery rate or the false negative rate at a user-specified level α.
 
-                ### Risk Control Types
+                ### Risk Control
 
-                | Type | Formula | Use When |
-                |------|---------|----------|
-                | **FDR** | FP / (FP + TP) | You want high precision - most retrieved results should be correct |
-                | **FNR** | FN / (FN + TP) | You want high recall - don't miss true matches |
+                | Type | Controls | Use When |
+                |------|----------|----------|
+                | **FDR** (α) | False discoveries among retrieved matches | You need high precision — most results should be correct |
+                | **FNR** (α) | Missed true matches among all real matches | You need high recall — don't miss true homologs |
 
-                ### How It Works
+                ### Pipeline
 
-                1. **Embedding**: Your protein sequences are converted to 512-dimensional vectors using Protein-Vec
-                2. **Search**: FAISS finds the k-nearest neighbors in the lookup database
-                3. **Thresholding**: Conformal prediction selects a similarity threshold λ̂ that guarantees:
-                   - E[Risk] ≤ α (your specified risk level)
-                4. **Calibration**: Venn-Abers provides calibrated probability estimates for each match
+                1. **Embed** — Protein-Vec converts sequences to 512-d vectors (ProtTrans T5 + mixture-of-experts)
+                2. **Search** — FAISS retrieves k-nearest neighbors from the lookup database
+                3. **Threshold** — A calibrated similarity cutoff λ̂ guarantees E[Risk] ≤ α
+                4. **Calibrate** — Venn-Abers prediction assigns each match a calibrated probability
 
-                ### The Math
+                ### Key Result
 
-                The threshold is chosen as:
-                ```
-                λ̂ = inf{λ: (1/n)∑ℓ(Xᵢ, Cλ(Xᵢ)) ≤ α - (1-α)/n}
-                ```
-
-                This guarantees that the expected risk E[ℓ(X, Cλ̂(X))] ≤ α under exchangeability.
+                Applied to JCVI Syn3.0 (a 473-gene minimal genome), this method confidently annotated
+                **59 of 149 (39.6%)** genes of unknown function at FDR α = 0.1.
 
                 ### Citation
 
@@ -1181,6 +1176,9 @@ def create_interface():
                 """)
 
         # Example sequences
+        EXAMPLE_CAS9 = """>sp|Q99ZW2|CAS9_STRP1 CRISPR-associated endonuclease Cas9 OS=Streptococcus pyogenes serotype M1 GN=cas9
+MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRICYLQEIFSNEMAKVDDSFFHRLEESFLVEEDKKHERHPIFGNIVDEVAYHEKYPTIYHLRKKLVDSTDKADLRLIYLALAHMIKFRGHFLIEGDLNPDNSDVDKLFIQLVQTYNQLFEENPINASGVDAKAILSARLSKSRRLENLIAQLPGEKKNGLFGNLIALSLGLTPNFKSNFDLAEDAKLQLSKDTYDDDLDNLLAQIGDQYADLFLAAKNLSDAILLSDILRVNTEITKAPLSASMIKRYDEHHQDLTLLKALVRQQLPEKYKEIFFDQSKNGYAGYIDGGASQEEFYKFIKPILEKMDGTEELLVKLNREDLLRKQRTFDNGSIPHQIHLGELHAILRRQEDFYPFLKDNREKIEKILTFRIPYYVGPLARGNSRFAWMTRKSEETITPWNFEEVVDKGASAQSFIERMTNFDKNLPNEKVLPKHSLLYEYFTVYNELTKVKYVTEGMRKPAFLSGEQKKAIVDLLFKTNRKVTVKQLKEDYFKKIECFDSVEISGVEDRFNASLGTYHDLLKIIKDKDFLDNEENEDILEDIVLTLTLFEDREMIEERLKTYAHLFDDKVMKQLKRRRYTGWGRLSRKLINGIRDKQSGKTILDFLKSDGFANRNFMQLIHDDSLTFKEDIQKAQVSGQGDSLHEHIANLAGSPAIKKGILQTVKVVDELVKVMGRHKPENIVIEMARENQTTQKGQKNSRERMKRIEEGIKELGSQILKEHPVENTQLQNEKLYLYYLQNGRDMYVDQELDINRLSDYDVDHIVPQSFLKDDSIDNKVLTRSDKNRGKSDNVPSEEVVKKMKNYWRQLLNAKLITQRKFDNLTKAERGGLSELDKAGFIKRQLVETRQITKHVAQILDSRMNTKYDENDKLIREVKVITLKSKLVSDFRKDFQFYKVREINNYHHAHDAYLNAVVGTALIKKYPKLESEFVYGDYKVYDVRKMIAKSEQEIGKATAKYFFYSNIMNFFKTEITLANGEIRKRPLIETNGETGEIVWDKGRDFATVRKVLSMPQVNIVKKTEVQTGGFSKESILPKRNSDKLIARKKDWDPKKYGGFDSPTVAYSVLVVAKVEKGKSKKLKSVKELLGITIMERSSFEKNPIDFLEAKGYKEVKKDLIIKLPKYSLFELENGRKRMLASAGELQKGNELALPSKYVNFLYLASHYEKLKGSPEDNEQKQLFVEQHKHYLDEIIEQISEFSKRVILADANLDKVLSAYNKHRDKPIREQAENIIHLFTLTNLGAPAAFKYFDTTIDRKRYTSTKEVLDATLIHQSITGLYETRIDLSQLGGD"""
+
         EXAMPLE_RECA = """>sp|P0A7G6|RECA_ECOLI Protein RecA OS=Escherichia coli (strain K12) GN=recA
 MAIDENKQKALAAALGQIEKQFGKGSIMRLGEDRSMDVETISTGSLSLDIALGAGGLPMGRIVEIYGPESSGKTTLTLQVIAAAQREGKTCAFIDAEHALDPIYARKLGVDIDNLLCSQPDTGEQALEICDALARSGAVDVIVVDSVAALTPKAEIEGEIGDSHMGLAARMMSQAMRKLAGNLKQSNTLLIFINQIRMKIGVMFGNPETTTGGNALKFYASVRLDIRRIGAVKEGENVVGSETRVKVVKNKIAAPFKQAEFQILYGEGINFYGELVDLGVKEKLIEKAGAWYSYKGEKIGQGKANATAWLKDNPETAKEIEKKVRELLLSNPNSTPDFSVDDSEGVAETNEDF"""
 
@@ -1190,17 +1188,34 @@ MFQLMPLDLIILLAACAGVSFGTKYENVGSIYSAFPLMIAGFNPSGPIILAVAGLGLTAISSLLRDLPNRLSTLPVGGYG
         EXAMPLE_INSULIN = """>sp|P01308|INS_HUMAN Insulin
 MALWMRLLPLLALLALWGPDPAAAFVNQHLCGSHLVEALYLVCGERGFFYTPKTRREAEDLQVGQVELGGGPGAGSLQPLALEGSLQKRGIVEQCCTSICSLYQLENYCN"""
 
+        EXAMPLE_SYN30 = """>MMSYN1_0411 1=Unknown
+MQIPIIKPKKAPPLTIEEINEIKQHSSYEKSYLKTFNKYKKKVEHRIYFKTSFWWDIFIIALAALANTITTDYFILATGDTGLFPGGTATIARFLSIVLNKHITSISTSSSFFIFLFIVNLPFFVFGFIKVGIKFTLTSLLYILLSIGWNQIITRLPIINPNEWSLIINYKLISSLPTEWSSKLWLFVFSIFGGFFLGITYSLTYRVGSSTAGTDFISAYVSKKYNKQIGSINMKINFTLLLIFVVLNTVIMPIYKIDSTAKLSVLNTLTDEQFTEIYNKAKDSGKFILDFNSHHHFYLPSNWSVSDQQIWTRQQIAQIIASNTNFTNYDNLTTIIKLKFVFGPSLFASFICFVIQGVVIDRIYPKNKLFTVLISTTKPREVKNYLFESGYRNNIHFLENQTAKKENGYIAQSVIMIHIGLMNWKPLQAGANNIDPDMMISFIRTKQVKGPWSYSLDTQKRELSLYKKVITDRRLMARIEKESILLTKQKITNDKKLKSKSKTF
+>MMSYN1_0133 2=Generic
+MNNLIVLKGKFEPGKNTKKPNSPQIPKTSIIKLEDCYRILDQLIKASSFWKEQKIDINPIINVKYKRIISKSNRVSYLLLKSLQKNNEHIIGSSFLDELVEKKIVKKQVITYCLTQKDLQEAIKRLDTITNILKKTHFKRIDNNLINLIANEQYLPIKKEIQKYEFLSRTAFISTLVDLNYIEEIFIKTTHIDNNVDSVVTLYDTGIKAIDLLNKLDINVNMSDFIDDYTLFLDRNQYNELKTKAPFLISMSVDDLTKFIIDDKQEEITKNDIISIPDPTNEPIVGVIDTMFCKDVYFSKWVDFRKEVSDDILLDSKDYQHGTQVSSIIVDGPSFNKKLEDGCGRFRVRHFGVMAHSSGNVFSLFKKIKSIVINNLDIKVWNLSLGSIREVSSNYISLLGSLLDQLQYENDVIFIVAGTNDNECKQKIVGSPADSINSIVVNSVDFKNKPANYSRKGPVLTYFNKPDISYYGGVDNNKITVCGCYGEAKVQGTSFAAPWITRKVAYLIYKMNYSKEEAKALIIDSAIKFDKQKDNNRDLIGYGVVPIHINEILQSKNTDIKVLLSYNTKAYYTYNFNLPVPTKENKFPFIAKLTFAYFAESQRSQGVDYTQDELDIQFGPIDNKSESINDINENNQSSSSSNAYIYEYEARKMFAKWNTVKSIIKWSKTNKGKKRQFIKTTNNRWGIRVIRKTRTDNINNKSIKFSLVITFRSIDNKDRIEEFISLCNKSGYWVASKVQIDNKIDIHGKSNEYLDFE
+>MMSYN1_0433 1=Unknown
+MFLEVIAKDLSDIRVINNSKADRIEFCKNLEVGGLTPSLDEIILANQITLKPLHIMIRNNSKDFFFDDYELIKQLEMISVIQKLPNVHGIVIGALNNDYTINEDFLQRVNKIKGSLKITFNRAFDLVDDPINALNVLVKHKIDTVLTSGGTNLNTGLEVIRQLVDQNLDIQILIGGGVDKNNIKQCLTVNNQIHLGRAARMNSSWNSDISVDEINLFKDLDREQNNE
+>MMSYN1_0080 1=Unknown
+MAEKQATVYHVTPYDGKWQVKGVGNTRPTKLFDTQKEAIAYANELTKKRQGSVIIHRTTGQVRDSINNKDKKK
+>MMSYN1_0005 1=Unknown
+MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIKPSIPKLKEVYKEALQVVEEVKRETDKNSSDSLINKIDEIKTIVKEVTEFANEFNDRSKKVEPKVREVIDQGKKITTDLEKVTKEIEELRKTGDSLTNRVRRGLNNFSTLGNLVGTANNDFKSVNESVIRITDLAKKISEEGKKITANVETIKKEVDYFSKRSEIPLRDIEKLKEIYRQKFPLFERNNKRLQEIWSKLMGIFNQFTVEKTQSNYYNHLIYILLFLIIDSIVLLVLTYMSMISKTMKKILLFYIFGILSFNPFVWVSVVISFLSRPIKNRKRKFS"""
+
         # Example button handlers
+        def load_cas9():
+            return EXAMPLE_CAS9
         def load_reca():
             return EXAMPLE_RECA
         def load_cox1():
             return EXAMPLE_COX1
         def load_insulin():
             return EXAMPLE_INSULIN
+        def load_syn30():
+            return EXAMPLE_SYN30
 
-        example_btn1.click(fn=load_reca, outputs=[fasta_text])
-        example_btn2.click(fn=load_cox1, outputs=[fasta_text])
-        example_btn3.click(fn=load_insulin, outputs=[fasta_text])
+        example_btn_cas9.click(fn=load_cas9, outputs=[fasta_text])
+        example_btn_reca.click(fn=load_reca, outputs=[fasta_text])
+        example_btn_cox1.click(fn=load_cox1, outputs=[fasta_text])
+        example_btn_insulin.click(fn=load_insulin, outputs=[fasta_text])
+        example_btn_syn30.click(fn=load_syn30, outputs=[fasta_text])
 
         # Export functionality
         export_btn.click(
@@ -1251,6 +1266,19 @@ MALWMRLLPLLALLALWGPDPAAAFVNQHLCGSHLVEALYLVCGERGFFYTPKTRREAEDLQVGQVELGGGPGAGSLQPL
             fn=update_database_selection,
             inputs=[db_type],
             outputs=[lookup_db_state, metadata_db_state, custom_lookup_upload, custom_metadata_upload]
+        )
+
+        # Update alpha dropdown choices when risk type changes
+        def update_alpha_choices(risk_choice):
+            if risk_choice == "FDR":
+                return gr.Dropdown(choices=FDR_ALPHAS, value=0.1)
+            else:
+                return gr.Dropdown(choices=FNR_ALPHAS, value=0.1)
+
+        risk_type.change(
+            fn=update_alpha_choices,
+            inputs=[risk_type],
+            outputs=[risk_value]
         )
     
     return interface
