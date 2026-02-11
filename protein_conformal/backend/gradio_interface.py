@@ -1054,7 +1054,7 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                                 info="FDR: Minimize false positives | FNR: Minimize missed matches"
                             )
 
-                            FDR_ALPHAS = [0.1]
+                            FDR_ALPHAS = [0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2]
                             FNR_ALPHAS = [0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2]
 
                             risk_value = gr.Dropdown(
