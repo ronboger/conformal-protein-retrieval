@@ -931,19 +931,12 @@ def _process_input_impl(stage_timer: StageTimer,
             "prob_partial",
         ]
         HIDDEN_COLS = {"D_score", "p0", "p1", "p0_partial", "p1_partial", "query_seq"}
-        TRUNCATE = {"query_meta": 50, "lookup_seq": 40, "lookup_meta": 50,
-                     "lookup_protein_names": 40}
         if not results_df.empty:
             display_columns = [col for col in preferred_order if col in results_df.columns
                                and col not in HIDDEN_COLS]
             display_columns.extend([col for col in results_df.columns if col not in display_columns
                                     and col not in HIDDEN_COLS])
             display_df = results_df.reindex(columns=display_columns).copy()
-            for col, lim in TRUNCATE.items():
-                if col in display_df.columns:
-                    display_df[col] = display_df[col].apply(
-                        lambda v, _l=lim: (str(v)[:_l] + "\u2026") if isinstance(v, str) and len(v) > _l else v
-                    )
             display_df = display_df.rename(columns=display_header_map)
         else:
             display_df = pd.DataFrame()
@@ -1071,9 +1064,51 @@ def create_interface():
         font-weight: 600;
     }
 
+    /* Results table: clip long text with ellipsis, fixed column widths */
+    #results-table table {
+        table-layout: fixed !important;
+        width: 100% !important;
+    }
+    #results-table table td,
+    #results-table table th {
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        white-space: nowrap !important;
+        max-width: 250px !important;
+    }
+    #results-table table td:hover {
+        cursor: default;
+    }
+
     """
 
-    with gr.Blocks(title="Conformal Protein Retrieval", css=custom_css, theme=gr.themes.Soft()) as interface:
+    # JS to enforce cell clipping via inline styles (highest specificity, survives Gradio scoped CSS)
+    custom_js = """
+    () => {
+        const applyTableStyles = () => {
+            const el = document.getElementById('results-table');
+            if (!el) return;
+            const table = el.querySelector('table');
+            if (table) {
+                table.style.tableLayout = 'fixed';
+                table.style.width = '100%';
+            }
+            el.querySelectorAll('table td, table th').forEach(cell => {
+                cell.style.overflow = 'hidden';
+                cell.style.textOverflow = 'ellipsis';
+                cell.style.whiteSpace = 'nowrap';
+                cell.style.maxWidth = '250px';
+            });
+        };
+        // Run on load and observe for dynamic table updates
+        applyTableStyles();
+        const observer = new MutationObserver(applyTableStyles);
+        const target = document.getElementById('results-table');
+        if (target) observer.observe(target, {childList: true, subtree: true});
+    }
+    """
+
+    with gr.Blocks(title="Conformal Protein Retrieval", css=custom_css, js=custom_js, theme=gr.themes.Soft()) as interface:
         # Header
         gr.HTML("""
         <div style="text-align: center; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; margin-bottom: 20px;">
@@ -1223,10 +1258,11 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                 with gr.Row():
                     with gr.Column(scale=2):
                         results_table = gr.Dataframe(
-                            label="Matches (click a cell to expand, click a row for full details)",
+                            label="Matches (click a row for full details →)",
                             wrap=False,
-                            interactive=True,
+                            interactive=False,
                             elem_id="results-table",
+                            column_widths=["150px", "100px", "180px", "200px", "100px", "200px", "110px", "110px"],
                         )
 
                     with gr.Column(scale=1):
@@ -1500,18 +1536,11 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 "prob_exact", "prob_partial",
             ]
             HIDDEN_COLS = {"D_score", "p0", "p1", "p0_partial", "p1_partial", "query_seq"}
-            TRUNCATE = {"query_meta": 50, "lookup_seq": 40, "lookup_meta": 50,
-                         "lookup_protein_names": 40}
             display_columns = [col for col in preferred_order if col in df.columns
                                and col not in HIDDEN_COLS]
             display_columns.extend([col for col in df.columns if col not in display_columns
                                     and col not in HIDDEN_COLS])
             display_df = df.reindex(columns=display_columns).copy()
-            for col, lim in TRUNCATE.items():
-                if col in display_df.columns:
-                    display_df[col] = display_df[col].apply(
-                        lambda v, _l=lim: (str(v)[:_l] + "\u2026") if isinstance(v, str) and len(v) > _l else v
-                    )
             display_df = display_df.rename(columns=display_header_map)
 
             # Build probability plot for the filtered query
