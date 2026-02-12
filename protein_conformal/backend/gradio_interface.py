@@ -541,6 +541,7 @@ def process_input(input_text: str,
                   custom_lookup_upload: Optional[Any] = None,
                   custom_metadata_upload: Optional[Any] = None,
                   match_type: str = "Exact",
+                  min_probability: float = 0.5,
                   progress=gr.Progress()) -> Tuple[str, pd.DataFrame]:
     """Wrapper that instruments the main pipeline with timing information."""
     stage_timer = StageTimer()
@@ -561,6 +562,7 @@ def process_input(input_text: str,
             custom_lookup_upload,
             custom_metadata_upload,
             match_type,
+            min_probability,
             progress,
         )
         return json.dumps(summary, indent=2, default=str), df
@@ -583,6 +585,7 @@ def _process_input_impl(stage_timer: StageTimer,
                         custom_lookup_upload: Optional[Any] = None,
                         custom_metadata_upload: Optional[Any] = None,
                         match_type: str = "Exact",
+                        min_probability: float = 0.5,
                         progress=gr.Progress()) -> Tuple[Dict[str, Any], pd.DataFrame]:
     """
     Process the input and generate predictions.
@@ -608,6 +611,8 @@ def _process_input_impl(stage_timer: StageTimer,
         - Table data (for the DataFrame display)
         - Complete results (for the raw JSON output)
     """
+    import hashlib
+
     # Ensure risk_value is numeric (Dropdown may return a string)
     risk_value = float(risk_value)
 
@@ -628,32 +633,6 @@ def _process_input_impl(stage_timer: StageTimer,
     # Ensure conformal_results is initialized
     conformal_results = {}
 
-    # Step 2: Get embeddings
-    if use_protein_vec and not custom_embeddings:
-        try:
-            progress(0.1, desc="Starting embedding process...")
-            with stage_timer.track("protein_vec_embedding"):
-                embeddings = run_embed_protein_vec(sequences, progress)
-            progress(0.6, desc="Embeddings complete!")
-        except Exception as e:
-            return {"error": f"Error generating embeddings: {str(e)}"}, pd.DataFrame()
-    elif custom_embeddings:
-        try:
-            progress(0.2, desc="Loading custom embeddings...")
-            with stage_timer.track("load_custom_embeddings"):
-                # Load user-provided embeddings
-                with tempfile.NamedTemporaryFile(suffix='.npy', delete=False) as tmp:
-                    tmp.write(custom_embeddings.read())
-                    tmp_path = tmp.name
-                
-                embeddings = np.load(tmp_path)
-                os.unlink(tmp_path)  # Clean up temp file
-            progress(0.4, desc="Custom embeddings loaded!")
-        except Exception as e:
-            return {"error": f"Error loading embeddings: {str(e)}"}, pd.DataFrame()
-    else:
-        return {"error": "Either Protein-Vec must be enabled or custom embeddings must be provided"}, pd.DataFrame()
-    
     # Handle custom uploaded database files if present
     if custom_lookup_upload is not None:
         try:
@@ -666,184 +645,244 @@ def _process_input_impl(stage_timer: StageTimer,
             metadata_db = _persist_uploaded_file(custom_metadata_upload, CUSTOM_UPLOAD_METADATA, preserve_suffix=True)
         except Exception as e:
             return {"error": f"Error processing custom metadata: {str(e)}"}, pd.DataFrame()
+
+    # ---- Caching: reuse embeddings and FAISS results across parameter changes ----
+    global CURRENT_SESSION
+    input_hash = hashlib.md5("".join(sequences).encode()).hexdigest()
+    cached = CURRENT_SESSION.get("_cache", {})
+    embeddings = None
+
+    # Step 2: Get embeddings (skip if same input sequences are cached)
+    if cached.get("input_hash") == input_hash and cached.get("embeddings") is not None:
+        embeddings = cached["embeddings"]
+        sequences = cached["sequences"]
+        query_meta = cached["query_meta"]
+        progress(0.5, desc="Using cached embeddings...")
+        logger.info("Reusing cached embeddings for %d sequences", len(sequences))
+    elif use_protein_vec and not custom_embeddings:
+        try:
+            progress(0.1, desc="Starting embedding process...")
+            with stage_timer.track("protein_vec_embedding"):
+                embeddings = run_embed_protein_vec(sequences, progress)
+            progress(0.6, desc="Embeddings complete!")
+        except Exception as e:
+            return {"error": f"Error generating embeddings: {str(e)}"}, pd.DataFrame()
+    elif custom_embeddings:
+        try:
+            progress(0.2, desc="Loading custom embeddings...")
+            with stage_timer.track("load_custom_embeddings"):
+                with tempfile.NamedTemporaryFile(suffix='.npy', delete=False) as tmp:
+                    tmp.write(custom_embeddings.read())
+                    tmp_path = tmp.name
+                embeddings = np.load(tmp_path)
+                os.unlink(tmp_path)
+            progress(0.4, desc="Custom embeddings loaded!")
+        except Exception as e:
+            return {"error": f"Error loading embeddings: {str(e)}"}, pd.DataFrame()
+    else:
+        return {"error": "Either Protein-Vec must be enabled or custom embeddings must be provided"}, pd.DataFrame()
     
-    # Step 3: Perform conformal prediction
+    # Step 3: Perform conformal prediction (or probability filter)
     try:
         # Determine which database is being used
         database_type = "Custom"
         if lookup_db == DEFAULT_LOOKUP_EMBEDDING:
-            database_type = "UniProt"
+            database_type = "Swiss-Prot"
         elif lookup_db == DEFAULT_SCOPE_EMBEDDING:
             database_type = "SCOPE"
-        
-        progress(0.5, desc=f"Performing conformal prediction with {risk_type} control...")
-        
-        with stage_timer.track("threshold_lookup"):
-            # Determine match type suffix for file/column lookup
-            is_partial = match_type.lower() == "partial"
-            match_type_label = "partial" if is_partial else "exact"
 
-            if risk_type.lower() == "fdr":
-                # Try partial FDR file if requested, fall back to exact
-                fdr_file = "./results/fdr_thresholds_partial.csv" if is_partial else "./results/fdr_thresholds.csv"
-                try:
-                    threshold_df = load_results_dataframe(
-                        fdr_file,
-                        required_columns=["alpha", "lambda_threshold"],
-                    )
-                except (FileNotFoundError, KeyError) as e:
-                    if is_partial:
-                        logger.warning(f"Partial FDR thresholds not available, using exact: {e}")
-                        threshold_df = load_results_dataframe(
-                            "./results/fdr_thresholds.csv",
-                            required_columns=["alpha", "lambda_threshold"],
-                        )
-                        match_type_label = "exact (partial unavailable)"
-                    else:
-                        raise
-                closest_idx = (threshold_df['alpha'] - risk_value).abs().idxmin()
-                closest_alpha = threshold_df.iloc[closest_idx]['alpha']
-                threshold = threshold_df.iloc[closest_idx]['lambda_threshold']
-                # Look for match-type-specific FDR column
-                fdr_col = 'partial_fdr' if is_partial else 'exact_fdr'
-                empirical_risk = threshold_df.iloc[closest_idx].get(fdr_col, None)
-                risk_description = "False Discovery Rate"
-                risk_formula = "FDR = FP / (FP + TP)"
-                risk_explanation = ("Controls the proportion of false discoveries (incorrect matches) "
-                                      "among all retrieved matches. Useful when you want to ensure most "
-                                      "retrieved results are correct.")
-                if abs(closest_alpha - risk_value) > 0.001:
-                    logger.warning(f"Requested alpha={risk_value} not available. Using closest alpha={closest_alpha}")
-            else:
-                # Try partial FNR file if requested, fall back to exact
-                fnr_file = "./results/fnr_thresholds_partial.csv" if is_partial else "./results/fnr_thresholds.csv"
-                try:
-                    threshold_df = load_results_dataframe(
-                        fnr_file,
-                        required_columns=["alpha", "lambda_threshold"],
-                    )
-                except (FileNotFoundError, KeyError) as e:
-                    if is_partial:
-                        logger.warning(f"Partial FNR thresholds not available, using exact: {e}")
-                        threshold_df = load_results_dataframe(
-                            "./results/fnr_thresholds.csv",
-                            required_columns=["alpha", "lambda_threshold"],
-                        )
-                        match_type_label = "exact (partial unavailable)"
-                    else:
-                        raise
-                closest_idx = (threshold_df['alpha'] - risk_value).abs().idxmin()
-                closest_alpha = threshold_df.iloc[closest_idx]['alpha']
-                threshold = threshold_df.iloc[closest_idx]['lambda_threshold']
-                # Look for match-type-specific FNR column
-                fnr_col = 'partial_fnr' if is_partial else 'exact_fnr'
-                empirical_risk = threshold_df.iloc[closest_idx].get(fnr_col, None)
-                risk_description = "False Negative Rate"
-                risk_formula = "FNR = FN / (FN + TP)"
-                risk_explanation = ("Controls the proportion of missed true matches among all actual matches. "
-                                      "Useful when you want to minimize missing true relationships, even at the "
-                                      "cost of including some false positives.")
-                if abs(closest_alpha - risk_value) > 0.001:
-                    logger.warning(f"Requested alpha={risk_value} not available. Using closest alpha={closest_alpha}")
-            
-        conformal_results = {
-            "threshold": float(threshold),
-            "risk_type": risk_type.lower(),
-            "match_type": match_type_label,
-            "empirical_risk": float(empirical_risk) if empirical_risk is not None else None,
-            "has_probability_calibration": True,
-        }
+        is_partial = match_type.lower() == "partial"
+        match_type_label = "partial" if is_partial else "exact"
+        is_prob_filter = risk_type == "Probability Filter"
 
-        if "error" in conformal_results:
-            return conformal_results, pd.DataFrame()
-
-        # Step 4: Run the search against the database with the threshold
-        progress(0.7, desc=f"Searching database with conformal threshold...")
-        
-        with stage_timer.track("database_search"):
-            results_df = run_search(
-                embeddings,
-                sequences,
-                query_meta,
-                lookup_db,
-                metadata_db,
-                threshold=conformal_results.get("threshold", 0.0),
-                k=max_results,
-                progress=progress
-            )
-        
-        # Process the results
-        all_matches = results_df.to_dict(orient="records")
-        
-        # If probability calibration is available, add probabilities to the matches
-        if conformal_results["has_probability_calibration"]:
-            # Using precomputed calibration data to interpolate probabilities
-            progress(0.8, desc="Calibrating probabilities...")
-            with stage_timer.track("probability_calibration"):
-                try:
-                    # Load precomputed calibration data
-                    cal_df = load_results_dataframe(
-                        DEFAULT_CALIBRATION_DATA,
-                        required_columns=["similarity", "prob_exact_p0", "prob_exact_p1"],
-                    )
-
-                    # Sort by similarity for interpolation
-                    cal_df = cal_df.sort_values('similarity')
-                    sim_cal = cal_df['similarity'].values
-                    p0_cal = cal_df['prob_exact_p0'].values
-                    p1_cal = cal_df['prob_exact_p1'].values
-
-                    # Calculate probabilities for each match using interpolation
-                    for i, match in enumerate(all_matches):
-                        sim_score = match["D_score"]
-                        # Interpolate p0 and p1 from calibration data
-                        p0 = np.interp(sim_score, sim_cal, p0_cal)
-                        p1 = np.interp(sim_score, sim_cal, p1_cal)
-                        # Average the probabilities as in the paper
-                        all_matches[i]["prob_exact"] = (p0 + p1) / 2
-                        all_matches[i]["p0"] = float(p0)
-                        all_matches[i]["p1"] = float(p1)
-                except Exception as e:
-                    logger.warning(f"Probability calibration failed: {e}. Using similarity scores as proxy.")
-                    for i, match in enumerate(all_matches):
-                        all_matches[i]["prob_exact"] = match["D_score"]
+        if is_prob_filter:
+            # Probability Filter mode — no conformal threshold, filter by p0 after search
+            progress(0.5, desc="Searching database (probability filter mode)...")
+            threshold = 0.0
+            closest_alpha = None
+            empirical_risk = None
+            conformal_results = {
+                "threshold": 0.0,
+                "risk_type": "probability_filter",
+                "match_type": match_type_label,
+                "empirical_risk": None,
+                "has_probability_calibration": True,
+            }
         else:
-            # If no probability calibration, use similarity as a proxy
+            progress(0.5, desc=f"Performing conformal prediction with {risk_type} control...")
+
+            with stage_timer.track("threshold_lookup"):
+                if risk_type.lower() == "fdr":
+                    fdr_file = "./results/fdr_thresholds_partial.csv" if is_partial else "./results/fdr_thresholds.csv"
+                    try:
+                        threshold_df = load_results_dataframe(
+                            fdr_file,
+                            required_columns=["alpha", "lambda_threshold"],
+                        )
+                    except (FileNotFoundError, KeyError) as e:
+                        if is_partial:
+                            logger.warning(f"Partial FDR thresholds not available, using exact: {e}")
+                            threshold_df = load_results_dataframe(
+                                "./results/fdr_thresholds.csv",
+                                required_columns=["alpha", "lambda_threshold"],
+                            )
+                            match_type_label = "exact (partial unavailable)"
+                        else:
+                            raise
+                    closest_idx = (threshold_df['alpha'] - risk_value).abs().idxmin()
+                    closest_alpha = threshold_df.iloc[closest_idx]['alpha']
+                    threshold = threshold_df.iloc[closest_idx]['lambda_threshold']
+                    fdr_col = 'partial_fdr' if is_partial else 'exact_fdr'
+                    empirical_risk = threshold_df.iloc[closest_idx].get(fdr_col, None)
+                    if abs(closest_alpha - risk_value) > 0.001:
+                        logger.warning(f"Requested alpha={risk_value} not available. Using closest alpha={closest_alpha}")
+                else:
+                    fnr_file = "./results/fnr_thresholds_partial.csv" if is_partial else "./results/fnr_thresholds.csv"
+                    try:
+                        threshold_df = load_results_dataframe(
+                            fnr_file,
+                            required_columns=["alpha", "lambda_threshold"],
+                        )
+                    except (FileNotFoundError, KeyError) as e:
+                        if is_partial:
+                            logger.warning(f"Partial FNR thresholds not available, using exact: {e}")
+                            threshold_df = load_results_dataframe(
+                                "./results/fnr_thresholds.csv",
+                                required_columns=["alpha", "lambda_threshold"],
+                            )
+                            match_type_label = "exact (partial unavailable)"
+                        else:
+                            raise
+                    closest_idx = (threshold_df['alpha'] - risk_value).abs().idxmin()
+                    closest_alpha = threshold_df.iloc[closest_idx]['alpha']
+                    threshold = threshold_df.iloc[closest_idx]['lambda_threshold']
+                    fnr_col = 'partial_fnr' if is_partial else 'exact_fnr'
+                    empirical_risk = threshold_df.iloc[closest_idx].get(fnr_col, None)
+                    if abs(closest_alpha - risk_value) > 0.001:
+                        logger.warning(f"Requested alpha={risk_value} not available. Using closest alpha={closest_alpha}")
+
+            conformal_results = {
+                "threshold": float(threshold),
+                "risk_type": risk_type.lower(),
+                "match_type": match_type_label,
+                "empirical_risk": float(empirical_risk) if empirical_risk is not None else None,
+                "has_probability_calibration": True,
+            }
+
+        # Step 4: Run FAISS search (cached across parameter changes for same input + db + k)
+        search_key = (input_hash, lookup_db, metadata_db, max_results)
+        if cached.get("search_key") == search_key and cached.get("raw_matches") is not None:
+            raw_matches = cached["raw_matches"]
+            progress(0.7, desc="Using cached search results...")
+            logger.info("Reusing cached FAISS results (%d raw matches)", len(raw_matches))
+        else:
+            progress(0.7, desc="Searching database...")
+            with stage_timer.track("database_search"):
+                results_df = run_search(
+                    embeddings,
+                    sequences,
+                    query_meta,
+                    lookup_db,
+                    metadata_db,
+                    threshold=0.0,  # Get ALL k results; filter by threshold below
+                    k=max_results,
+                    progress=progress
+                )
+            raw_matches = results_df.to_dict(orient="records")
+            # Calibrate raw matches (instant: np.interp lookup table)
+            try:
+                cal_df = load_results_dataframe(
+                    DEFAULT_CALIBRATION_DATA,
+                    required_columns=["similarity", "prob_exact_p0", "prob_exact_p1"],
+                )
+                cal_df = cal_df.sort_values('similarity')
+                _sim_cal = cal_df['similarity'].values
+                _p0_exact_cal = cal_df['prob_exact_p0'].values
+                _p1_exact_cal = cal_df['prob_exact_p1'].values
+                _has_partial = 'prob_partial_p0' in cal_df.columns and 'prob_partial_p1' in cal_df.columns
+                if _has_partial:
+                    _p0_partial_cal = cal_df['prob_partial_p0'].values
+                    _p1_partial_cal = cal_df['prob_partial_p1'].values
+                for m in raw_matches:
+                    sim = m["D_score"]
+                    m["p0"] = float(np.interp(sim, _sim_cal, _p0_exact_cal))
+                    m["p1"] = float(np.interp(sim, _sim_cal, _p1_exact_cal))
+                    if _has_partial:
+                        m["p0_partial"] = float(np.interp(sim, _sim_cal, _p0_partial_cal))
+                        m["p1_partial"] = float(np.interp(sim, _sim_cal, _p1_partial_cal))
+            except Exception as e:
+                logger.warning(f"Raw match calibration failed: {e}")
+            # Update cache
+            CURRENT_SESSION["_cache"] = {
+                "input_hash": input_hash,
+                "embeddings": embeddings,
+                "sequences": sequences,
+                "query_meta": query_meta,
+                "search_key": search_key,
+                "raw_matches": raw_matches,
+            }
+
+        # Apply conformal threshold to cached raw results
+        sim_threshold = conformal_results.get("threshold", 0.0)
+        all_matches = [m for m in raw_matches if m["D_score"] >= sim_threshold]
+
+        # Format probability display strings (p0/p1 already computed on raw_matches)
+        progress(0.8, desc="Formatting probabilities...")
+        with stage_timer.track("probability_formatting"):
             for i, match in enumerate(all_matches):
-                all_matches[i]["prob_exact"] = match["D_score"]
-        
-        # Store all matches in the session
+                p0_e = match.get("p0", 0)
+                p1_e = match.get("p1", 0)
+                mean_e = (p0_e + p1_e) / 2
+                half_e = abs(p1_e - p0_e) / 2
+                all_matches[i]["prob_exact"] = f"{mean_e:.3f} \u00b1 {half_e:.3f}"
+                p0_p = match.get("p0_partial")
+                if p0_p is not None:
+                    p1_p = match.get("p1_partial", 0)
+                    mean_p = (p0_p + p1_p) / 2
+                    half_p = abs(p1_p - p0_p) / 2
+                    all_matches[i]["prob_partial"] = f"{mean_p:.3f} \u00b1 {half_p:.3f}"
+
+        # For Probability Filter mode, post-filter by p0 (conservative lower bound)
+        if is_prob_filter:
+            p0_key = "p0_partial" if is_partial else "p0"
+            all_matches = [m for m in all_matches if m.get(p0_key, 0) >= min_probability]
+
         total_matches = len(all_matches)
-        
-        # Convert all_matches back to DataFrame with prob_exact column
-        results_df = pd.DataFrame(all_matches)
-        
+        results_df = pd.DataFrame(all_matches) if all_matches else pd.DataFrame()
+
         with stage_timer.track("results_packaging"):
-            # 1. Create concise summary for display
-            alpha_note = f" (only α=0.1 calibrated)" if risk_type.lower() == "fdr" and abs(float(closest_alpha) - risk_value) > 0.001 else ""
+            # Build summary
             summary = {
                 "status": "success",
                 "matches_found": total_matches,
-                "risk_control": {
+            }
+            if is_prob_filter:
+                summary["search_mode"] = {
+                    "type": "Probability Filter",
+                    "min_probability_p0": min_probability,
+                    "match_type": match_type_label,
+                }
+            else:
+                summary["risk_control"] = {
                     "type": conformal_results["risk_type"].upper(),
                     "alpha_used": float(closest_alpha),
                     "alpha_requested": risk_value,
                     "threshold": round(conformal_results["threshold"], 10),
                     "empirical_risk": round(conformal_results["empirical_risk"], 4) if conformal_results["empirical_risk"] else None,
-                },
-                "search_config": {
-                    "database": database_type,
-                    "match_type": conformal_results["match_type"],
-                    "max_k": max_results,
-                },
-                "note": alpha_note.strip() if alpha_note.strip() else None,
+                }
+            summary["search_config"] = {
+                "database": database_type,
+                "match_type": conformal_results["match_type"],
+                "max_k": max_results,
             }
-            # Remove None values for cleaner output
-            summary = {k: v for k, v in summary.items() if v is not None}
-            if summary.get("note") is None:
-                summary.pop("note", None)
+            # Threshold >= 1.0 warning
+            if not is_prob_filter and conformal_results["threshold"] >= 1.0:
+                summary["warning"] = "Threshold >= 1.0: no results can pass at this alpha level. Try a less strict (higher) alpha."
 
-            # 2. Complete results for export
+            # Remove None values
+            summary = {k: v for k, v in summary.items() if v is not None}
+
+            # Complete results for export
             complete_results = {
                 "summary": summary,
                 "matches": all_matches,
@@ -853,8 +892,8 @@ def _process_input_impl(stage_timer: StageTimer,
                 "empirical_risk": conformal_results["empirical_risk"]
             }
 
-            # Store in session for export
-            global CURRENT_SESSION
+            # Preserve _cache across updates
+            existing_cache = CURRENT_SESSION.get("_cache", {})
             CURRENT_SESSION = {
                 "results": complete_results,
                 "parameters": {
@@ -862,39 +901,53 @@ def _process_input_impl(stage_timer: StageTimer,
                     "risk_value": risk_value,
                     "max_results": max_results,
                     "database_type": database_type,
-                }
+                },
+                "_cache": existing_cache,
             }
-        
-        progress(1.0, desc="Conformal prediction complete!")
+
+        progress(1.0, desc="Search complete!")
+
+        # Format display DataFrame
+        # Internal columns hidden from display: D_score, p0, p1, p0_partial, p1_partial, query_seq
         display_header_map = {
+            "query_meta": "Query",
             "query_seq": "Query Sequence",
-            "query_meta": "Query Description",
             "lookup_seq": "Match Sequence",
             "lookup_meta": "Match Description",
             "lookup_entry": "UniProt Entry",
             "lookup_pfam": "Pfam",
             "lookup_protein_names": "Protein Name(s)",
-            "D_score": "Similarity (D score)",
-            "prob_exact": "Match Probability",
-            "p0": "Prob (p0)",
-            "p1": "Prob (p1)",
+            "prob_exact": "Exact Match Prob",
+            "prob_partial": "Partial Match Prob",
         }
         preferred_order = [
             "query_meta",
-            "query_seq",
             "lookup_entry",
-            "lookup_pfam",
             "lookup_protein_names",
-            "lookup_meta",
             "lookup_seq",
-            "D_score",
+            "lookup_pfam",
+            "lookup_meta",
             "prob_exact",
-            "p0",
-            "p1",
+            "prob_partial",
         ]
-        display_columns = [col for col in preferred_order if col in results_df.columns]
-        display_columns.extend([col for col in results_df.columns if col not in display_columns])
-        display_df = results_df.reindex(columns=display_columns).rename(columns=display_header_map)
+        HIDDEN_COLS = {"D_score", "p0", "p1", "p0_partial", "p1_partial", "query_seq"}
+        TRUNCATE = {"query_meta": 50, "lookup_seq": 40, "lookup_meta": 50,
+                     "lookup_protein_names": 40}
+        if not results_df.empty:
+            display_columns = [col for col in preferred_order if col in results_df.columns
+                               and col not in HIDDEN_COLS]
+            display_columns.extend([col for col in results_df.columns if col not in display_columns
+                                    and col not in HIDDEN_COLS])
+            display_df = results_df.reindex(columns=display_columns).copy()
+            for col, lim in TRUNCATE.items():
+                if col in display_df.columns:
+                    display_df[col] = display_df[col].apply(
+                        lambda v, _l=lim: (str(v)[:_l] + "\u2026") if isinstance(v, str) and len(v) > _l else v
+                    )
+            display_df = display_df.rename(columns=display_header_map)
+        else:
+            display_df = pd.DataFrame()
+
         return summary, display_df
     except Exception as e:
         error_message = {"error": f"Error during search: {str(e)}"}
@@ -961,6 +1014,37 @@ def export_current_results(format_type: str) -> Tuple[str, Optional[str]]:
             "error": f"Error exporting results: {str(e)}"
         }, indent=2), None
 
+def export_embeddings() -> Tuple[str, Optional[str]]:
+    """Export cached query embeddings as a .npy file for reuse with the CLI."""
+    global CURRENT_SESSION
+    cache = (CURRENT_SESSION or {}).get("_cache", {})
+    embeddings = cache.get("embeddings")
+    query_meta = cache.get("query_meta")
+    if embeddings is None:
+        return json.dumps({"error": "No embeddings available. Run a search first."}, indent=2), None
+
+    try:
+        os.makedirs("exported_reports", exist_ok=True)
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        n_seqs, dim = embeddings.shape
+
+        npy_path = os.path.join("exported_reports", f"query_embeddings_{timestamp}.npy")
+        np.save(npy_path, embeddings)
+
+        msg = {
+            "success": True,
+            "message": f"Saved {n_seqs} embeddings ({dim}-dim) as {npy_path}",
+            "shape": [n_seqs, dim],
+            "note": "Order matches input FASTA. Use with: cpr search --query <this file>",
+        }
+        if query_meta:
+            msg["queries"] = [m[:60] + "..." if len(m) > 60 else m for m in query_meta]
+        return json.dumps(msg, indent=2), npy_path
+    except Exception as e:
+        return json.dumps({"error": f"Error saving embeddings: {e}"}, indent=2), None
+
+
 def create_interface():
     """
     Create and configure the Gradio interface for protein conformal prediction
@@ -986,6 +1070,7 @@ def create_interface():
         font-size: 1.1em;
         font-weight: 600;
     }
+
     """
 
     with gr.Blocks(title="Conformal Protein Retrieval", css=custom_css, theme=gr.themes.Soft()) as interface:
@@ -1006,7 +1091,7 @@ def create_interface():
         gr.HTML("""
         <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 14px 18px; margin: 10px 0; border-radius: 8px; color: white;">
             <strong>How it works:</strong> Enter protein sequences in FASTA format, choose FDR or FNR risk control,
-            and retrieve functionally similar proteins from UniProt with provable error-rate guarantees.
+            and retrieve functionally similar proteins from Swiss-Prot (reviewed UniProt, 540K proteins) with provable error-rate guarantees.
         </div>
         """)
 
@@ -1048,14 +1133,14 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
 
                         with gr.Group():
                             risk_type = gr.Radio(
-                                ["FDR", "FNR"],
-                                label="Risk Control Type",
+                                ["FDR", "FNR", "Probability Filter"],
+                                label="Search Mode",
                                 value="FDR",
-                                info="FDR: Minimize false positives | FNR: Minimize missed matches"
+                                info="FDR/FNR: Conformal guarantees | Probability Filter: Direct threshold on match probability"
                             )
 
-                            FDR_ALPHAS = [0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2]
-                            FNR_ALPHAS = [0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2]
+                            FDR_ALPHAS = [0.005, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2]
+                            FNR_ALPHAS = [0.005, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2]
 
                             risk_value = gr.Dropdown(
                                 choices=FDR_ALPHAS,
@@ -1064,28 +1149,44 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                                 info="Lower = stricter threshold, fewer but more confident results"
                             )
 
+                            min_probability = gr.Slider(
+                                minimum=0.0,
+                                maximum=1.0,
+                                value=0.5,
+                                step=0.01,
+                                label="Minimum Match Probability (p0)",
+                                info="Conservative lower-bound probability for filtering matches",
+                                visible=False,
+                            )
+
                             match_type = gr.Radio(
                                 ["Exact", "Partial"],
-                                label="Match Type",
+                                label="Pfam Match Type",
                                 value="Exact",
-                                info="Exact: All Pfam domains match | Partial: At least one matches"
+                                info="Exact: All Pfam domains match | Partial: At least one Pfam domain overlaps"
+                            )
+
+                            hide_uncharacterized = gr.Checkbox(
+                                label="Hide uncharacterized proteins",
+                                value=False,
+                                info="Filter out results with 'Uncharacterized' in protein name"
                             )
 
                         # Database options in accordion
                         with gr.Accordion("Advanced Options", open=False):
                             db_type = gr.Radio(
-                                ["UniProt", "SCOPE", "Custom"],
+                                ["Swiss-Prot (540K)", "SCOPE", "Custom"],
                                 label="Database",
-                                value="UniProt",
+                                value="Swiss-Prot (540K)",
                                 info="Select lookup database"
                             )
 
                             max_results_slider = gr.Slider(
-                                minimum=100,
+                                minimum=1,
                                 maximum=5000,
                                 value=1000,
                                 step=100,
-                                label="Max Results (k)",
+                                label="Max Results per Query (k)",
                                 info="Maximum neighbors per query"
                             )
 
@@ -1111,14 +1212,31 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                 gr.Markdown("### Results")
 
                 with gr.Row():
+                    query_filter = gr.Dropdown(
+                        choices=["All queries"],
+                        value="All queries",
+                        label="Filter by Query",
+                        interactive=True,
+                        scale=3,
+                    )
+
+                with gr.Row():
                     with gr.Column(scale=2):
                         results_table = gr.Dataframe(
-                            label="Matches (click headers to sort)",
-                            wrap=True,
-                            interactive=True
+                            label="Matches (click a cell to expand, click a row for full details)",
+                            wrap=False,
+                            interactive=True,
+                            elem_id="results-table",
                         )
 
                     with gr.Column(scale=1):
+                        sequence_detail = gr.Code(
+                            label="Selected Match (click to copy)",
+                            language=None,
+                            interactive=False,
+                            visible=False,
+                        )
+
                         results_summary = gr.Code(language="json", label="Search Summary", interactive=False)
 
                         with gr.Row():
@@ -1128,17 +1246,23 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                                 value="csv",
                                 scale=2
                             )
-                            export_btn = gr.Button("Export", size="sm", scale=1)
+                            export_btn = gr.Button("Export Results", size="sm", scale=1)
+                            save_emb_btn = gr.Button("Save Embeddings (.npy)", size="sm", scale=1)
 
                         export_status = gr.Code(language="json", label="Export Status", interactive=False)
                         export_download = gr.File(label="Download", interactive=False)
+
+                prob_plot = gr.Plot(
+                    label="Match Probability vs. Rank",
+                    visible=False,
+                )
 
             with gr.TabItem("About"):
                 gr.Markdown("""
                 ## Conformal Protein Retrieval
 
                 This tool searches for functionally similar proteins with **provable error-rate guarantees**
-                using conformal prediction. Given a query protein, it retrieves matches from UniProt (or a custom database)
+                using conformal prediction. Given a query protein, it retrieves matches from Swiss-Prot (reviewed UniProt, 540K proteins) or a custom database
                 and controls either the false discovery rate or the false negative rate at a user-specified level α.
 
                 ### Risk Control
@@ -1188,7 +1312,10 @@ MFQLMPLDLIILLAACAGVSFGTKYENVGSIYSAFPLMIAGFNPSGPIILAVAGLGLTAISSLLRDLPNRLSTLPVGGYG
         EXAMPLE_INSULIN = """>sp|P01308|INS_HUMAN Insulin
 MALWMRLLPLLALLALWGPDPAAAFVNQHLCGSHLVEALYLVCGERGFFYTPKTRREAEDLQVGQVELGGGPGAGSLQPLALEGSLQKRGIVEQCCTSICSLYQLENYCN"""
 
-        EXAMPLE_SYN30 = """>MMSYN1_0411 1=Unknown
+        # Syn3.0: Load full 149-protein FASTA from file, fallback to 5-protein subset
+        # On Modal: bundled at /app/bundled/syn30.fasta; locally: ./data/gene_unknown/unknown_aa_seqs.fasta
+        SYN30_FASTA_PATHS = ["./bundled/syn30.fasta", "./data/gene_unknown/unknown_aa_seqs.fasta"]
+        EXAMPLE_SYN30_FALLBACK = """>MMSYN1_0411 1=Unknown
 MQIPIIKPKKAPPLTIEEINEIKQHSSYEKSYLKTFNKYKKKVEHRIYFKTSFWWDIFIIALAALANTITTDYFILATGDTGLFPGGTATIARFLSIVLNKHITSISTSSSFFIFLFIVNLPFFVFGFIKVGIKFTLTSLLYILLSIGWNQIITRLPIINPNEWSLIINYKLISSLPTEWSSKLWLFVFSIFGGFFLGITYSLTYRVGSSTAGTDFISAYVSKKYNKQIGSINMKINFTLLLIFVVLNTVIMPIYKIDSTAKLSVLNTLTDEQFTEIYNKAKDSGKFILDFNSHHHFYLPSNWSVSDQQIWTRQQIAQIIASNTNFTNYDNLTTIIKLKFVFGPSLFASFICFVIQGVVIDRIYPKNKLFTVLISTTKPREVKNYLFESGYRNNIHFLENQTAKKENGYIAQSVIMIHIGLMNWKPLQAGANNIDPDMMISFIRTKQVKGPWSYSLDTQKRELSLYKKVITDRRLMARIEKESILLTKQKITNDKKLKSKSKTF
 >MMSYN1_0133 2=Generic
 MNNLIVLKGKFEPGKNTKKPNSPQIPKTSIIKLEDCYRILDQLIKASSFWKEQKIDINPIINVKYKRIISKSNRVSYLLLKSLQKNNEHIIGSSFLDELVEKKIVKKQVITYCLTQKDLQEAIKRLDTITNILKKTHFKRIDNNLINLIANEQYLPIKKEIQKYEFLSRTAFISTLVDLNYIEEIFIKTTHIDNNVDSVVTLYDTGIKAIDLLNKLDINVNMSDFIDDYTLFLDRNQYNELKTKAPFLISMSVDDLTKFIIDDKQEEITKNDIISIPDPTNEPIVGVIDTMFCKDVYFSKWVDFRKEVSDDILLDSKDYQHGTQVSSIIVDGPSFNKKLEDGCGRFRVRHFGVMAHSSGNVFSLFKKIKSIVINNLDIKVWNLSLGSIREVSSNYISLLGSLLDQLQYENDVIFIVAGTNDNECKQKIVGSPADSINSIVVNSVDFKNKPANYSRKGPVLTYFNKPDISYYGGVDNNKITVCGCYGEAKVQGTSFAAPWITRKVAYLIYKMNYSKEEAKALIIDSAIKFDKQKDNNRDLIGYGVVPIHINEILQSKNTDIKVLLSYNTKAYYTYNFNLPVPTKENKFPFIAKLTFAYFAESQRSQGVDYTQDELDIQFGPIDNKSESINDINENNQSSSSSNAYIYEYEARKMFAKWNTVKSIIKWSKTNKGKKRQFIKTTNNRWGIRVIRKTRTDNINNKSIKFSLVITFRSIDNKDRIEEFISLCNKSGYWVASKVQIDNKIDIHGKSNEYLDFE
@@ -1209,7 +1336,13 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
         def load_insulin():
             return EXAMPLE_INSULIN
         def load_syn30():
-            return EXAMPLE_SYN30
+            for path in SYN30_FASTA_PATHS:
+                try:
+                    with open(path) as f:
+                        return f.read()
+                except FileNotFoundError:
+                    continue
+            return EXAMPLE_SYN30_FALLBACK
 
         example_btn_cas9.click(fn=load_cas9, outputs=[fasta_text])
         example_btn_reca.click(fn=load_reca, outputs=[fasta_text])
@@ -1224,23 +1357,216 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
             outputs=[export_status, export_download]
         )
 
+        save_emb_btn.click(
+            fn=export_embeddings,
+            inputs=[],
+            outputs=[export_status, export_download]
+        )
+
+        # --- Probability vs. rank plot helper ---
+        def _build_prob_plot(query_label=None):
+            """Build a line plot of exact/partial match probability vs. rank (1..k)
+            using all raw matches from the cache (before threshold filtering)."""
+            global CURRENT_SESSION
+            raw = (CURRENT_SESSION or {}).get("_cache", {}).get("raw_matches", [])
+            if not raw:
+                return None
+            import plotly.graph_objects as go
+
+            # Filter to the selected query
+            if query_label and query_label != "All queries":
+                qm = [m for m in raw if m.get("query_meta") == query_label]
+            else:
+                qm = raw
+
+            if not qm:
+                return None
+
+            # Sort by D_score descending (rank 1 = best match)
+            qm_sorted = sorted(qm, key=lambda m: m.get("D_score", 0), reverse=True)
+
+            ranks = list(range(1, len(qm_sorted) + 1))
+            exact_probs = [(m.get("p0", 0) + m.get("p1", 0)) / 2 for m in qm_sorted]
+            partial_probs = [(m.get("p0_partial", 0) + m.get("p1_partial", 0)) / 2
+                             for m in qm_sorted if m.get("p0_partial") is not None]
+
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=ranks,
+                y=exact_probs,
+                mode="lines",
+                name="Exact match",
+                line=dict(color="rgba(102, 126, 234, 0.9)", width=2),
+            ))
+            if len(partial_probs) == len(ranks):
+                fig.add_trace(go.Scatter(
+                    x=ranks,
+                    y=partial_probs,
+                    mode="lines",
+                    name="Partial match",
+                    line=dict(color="rgba(118, 75, 162, 0.9)", width=2),
+                ))
+
+            title = "Exact/Partial Match Probability vs. Rank"
+            if query_label and query_label != "All queries":
+                ql = query_label if len(query_label) <= 50 else query_label[:47] + "..."
+                title = f"Match Probability vs. Rank — {ql}"
+
+            fig.update_layout(
+                title=title,
+                xaxis_title="Rank (k)",
+                yaxis_title="Calibrated Probability",
+                yaxis_range=[0, 1.05],
+                height=350,
+                margin=dict(l=50, r=20, t=50, b=40),
+                template="plotly_white",
+                legend=dict(yanchor="top", y=0.98, xanchor="right", x=0.98),
+            )
+            return fig
+
         # Main prediction submission
+        def on_submit(fasta, upload, risk_t, risk_v, max_k, use_pv, custom_emb,
+                      lookup, metadata, custom_lookup, custom_meta, m_type,
+                      min_prob, hide_unc):
+            summary_json, df = process_input(
+                "", fasta, upload, "fasta_format", risk_t, risk_v, max_k,
+                use_pv, custom_emb, lookup, metadata, custom_lookup, custom_meta,
+                m_type, min_prob,
+            )
+            # Apply hide-uncharacterized filter
+            if hide_unc and not df.empty and "Protein Name(s)" in df.columns:
+                df = df[~df["Protein Name(s)"].str.contains("Uncharacterized", case=False, na=False)]
+            # Build per-query dropdown choices
+            if not df.empty and "Query" in df.columns:
+                unique_queries = df["Query"].unique().tolist()
+                choices = ["All queries"] + unique_queries
+            else:
+                unique_queries = []
+                choices = ["All queries"]
+            # Build probability vs. rank plot for the first query
+            plot_label = unique_queries[0] if unique_queries else None
+            fig = _build_prob_plot(query_label=plot_label)
+            return (
+                summary_json,
+                df,
+                gr.Dropdown(choices=choices, value=unique_queries[0] if unique_queries else "All queries"),
+                gr.Code(visible=False, value=""),
+                gr.Plot(value=fig, visible=fig is not None),
+            )
+
         submit_btn.click(
-            fn=lambda fasta, upload, risk_t, risk_v, max_k, use_pv, custom_emb, lookup, metadata, custom_lookup, custom_meta, m_type:
-                process_input("", fasta, upload, "fasta_format", risk_t, risk_v, max_k, use_pv, custom_emb, lookup, metadata, custom_lookup, custom_meta, m_type),
+            fn=on_submit,
             inputs=[
                 fasta_text, upload_file,
                 risk_type, risk_value, max_results_slider,
                 use_protein_vec, custom_embeddings_state,
                 lookup_db_state, metadata_db_state, custom_lookup_upload, custom_metadata_upload,
-                match_type
+                match_type, min_probability, hide_uncharacterized,
             ],
-            outputs=[results_summary, results_table]
+            outputs=[results_summary, results_table, query_filter, sequence_detail, prob_plot]
+        )
+
+        # Per-query filtering
+        def filter_by_query(query_choice):
+            global CURRENT_SESSION
+            if not CURRENT_SESSION or "results" not in CURRENT_SESSION:
+                return pd.DataFrame(), gr.Code(visible=False, value=""), gr.Plot(visible=False)
+            matches = CURRENT_SESSION["results"].get("matches", [])
+            if not matches:
+                return pd.DataFrame(), gr.Code(visible=False, value=""), gr.Plot(visible=False)
+
+            # Filter matches for the selected query
+            if query_choice and query_choice != "All queries":
+                filtered_matches = [m for m in matches if m.get("query_meta") == query_choice]
+            else:
+                filtered_matches = matches
+
+            df = pd.DataFrame(filtered_matches)
+            # Apply display formatting (same as in _process_input_impl)
+            display_header_map = {
+                "query_meta": "Query",
+                "query_seq": "Query Sequence",
+                "lookup_seq": "Match Sequence",
+                "lookup_meta": "Match Description",
+                "lookup_entry": "UniProt Entry",
+                "lookup_pfam": "Pfam",
+                "lookup_protein_names": "Protein Name(s)",
+                "prob_exact": "Exact Match Prob",
+                "prob_partial": "Partial Match Prob",
+            }
+            preferred_order = [
+                "query_meta", "lookup_entry", "lookup_protein_names",
+                "lookup_seq", "lookup_pfam", "lookup_meta",
+                "prob_exact", "prob_partial",
+            ]
+            HIDDEN_COLS = {"D_score", "p0", "p1", "p0_partial", "p1_partial", "query_seq"}
+            TRUNCATE = {"query_meta": 50, "lookup_seq": 40, "lookup_meta": 50,
+                         "lookup_protein_names": 40}
+            display_columns = [col for col in preferred_order if col in df.columns
+                               and col not in HIDDEN_COLS]
+            display_columns.extend([col for col in df.columns if col not in display_columns
+                                    and col not in HIDDEN_COLS])
+            display_df = df.reindex(columns=display_columns).copy()
+            for col, lim in TRUNCATE.items():
+                if col in display_df.columns:
+                    display_df[col] = display_df[col].apply(
+                        lambda v, _l=lim: (str(v)[:_l] + "\u2026") if isinstance(v, str) and len(v) > _l else v
+                    )
+            display_df = display_df.rename(columns=display_header_map)
+
+            # Build probability plot for the filtered query
+            plot_label = query_choice if query_choice and query_choice != "All queries" else None
+            fig = _build_prob_plot(query_label=plot_label)
+            return display_df, gr.Code(visible=False, value=""), gr.Plot(value=fig, visible=fig is not None)
+
+        query_filter.change(
+            fn=filter_by_query,
+            inputs=[query_filter],
+            outputs=[results_table, sequence_detail, prob_plot],
+        )
+
+        # Row selection → show full sequences from session (table has truncated versions)
+        def on_row_select(df, evt: gr.SelectData):
+            if df is None or df.empty:
+                return gr.Code(visible=False, value="")
+            row_idx = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
+            if row_idx >= len(df):
+                return gr.Code(visible=False, value="")
+            # Try to get full data from session
+            global CURRENT_SESSION
+            matches = (CURRENT_SESSION or {}).get("results", {}).get("matches", [])
+            if row_idx < len(matches):
+                m = matches[row_idx]
+                parts = []
+                if m.get("lookup_protein_names"):
+                    parts.append(f"Protein: {m['lookup_protein_names']}")
+                if m.get("lookup_entry"):
+                    parts.append(f"Entry: {m['lookup_entry']}")
+                if m.get("lookup_pfam"):
+                    parts.append(f"Pfam: {m['lookup_pfam']}")
+                if m.get("query_meta"):
+                    parts.append(f"\nQuery: {m['query_meta']}")
+                if m.get("query_seq"):
+                    parts.append(f"\nQuery Sequence:\n{m['query_seq']}")
+                if m.get("lookup_seq"):
+                    parts.append(f"\nMatch Sequence:\n{m['lookup_seq']}")
+                text = "\n".join(parts)
+            else:
+                # Fallback to display table row
+                row = df.iloc[row_idx]
+                parts = [f"{col}: {row[col]}" for col in row.index if row[col]]
+                text = "\n\n".join(parts) if parts else "No detail available"
+            return gr.Code(visible=True, value=text)
+
+        results_table.select(
+            fn=on_row_select,
+            inputs=[results_table],
+            outputs=[sequence_detail],
         )
 
         # Database selection event handler
         def update_database_selection(db_choice):
-            if db_choice == "UniProt":
+            if db_choice == "Swiss-Prot (540K)":
                 return (
                     DEFAULT_LOOKUP_EMBEDDING,
                     DEFAULT_LOOKUP_METADATA,
@@ -1268,17 +1594,28 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
             outputs=[lookup_db_state, metadata_db_state, custom_lookup_upload, custom_metadata_upload]
         )
 
-        # Update alpha dropdown choices when risk type changes
-        def update_alpha_choices(risk_choice):
-            if risk_choice == "FDR":
-                return gr.Dropdown(choices=FDR_ALPHAS, value=0.1)
-            else:
-                return gr.Dropdown(choices=FNR_ALPHAS, value=0.1)
+        # Update alpha dropdown / probability slider when risk type changes
+        def update_risk_controls(risk_choice):
+            if risk_choice == "Probability Filter":
+                return (
+                    gr.Dropdown(choices=FDR_ALPHAS, value=0.1, visible=False),
+                    gr.Slider(visible=True),
+                )
+            elif risk_choice == "FNR":
+                return (
+                    gr.Dropdown(choices=FNR_ALPHAS, value=0.1, visible=True),
+                    gr.Slider(visible=False),
+                )
+            else:  # FDR
+                return (
+                    gr.Dropdown(choices=FDR_ALPHAS, value=0.1, visible=True),
+                    gr.Slider(visible=False),
+                )
 
         risk_type.change(
-            fn=update_alpha_choices,
+            fn=update_risk_controls,
             inputs=[risk_type],
-            outputs=[risk_value]
+            outputs=[risk_value, min_probability]
         )
     
     return interface

@@ -142,6 +142,9 @@ def get_thresh_new_FDR(X, Y, alpha):
     else:
         lhat = 0
 
+    # Clamp to [0, 1] — FAISS cosine sims can slightly exceed 1.0 due to float32 rounding
+    lhat = min(float(lhat), 1.0)
+
     return lhat
 
 
@@ -389,6 +392,8 @@ def get_thresh_FDR(labels, sims, alpha, delta=0.5, N=100):
     # Pick the smallest lambda such that all lambda above it have p-value below delta
     pvals_satisfy_condition = np.array([np.all(below[i:]) for i in range(N)])
     lhat = lambdas[np.argmax(pvals_satisfy_condition)]
+    # Clamp to [0, 1] — FAISS cosine sims can slightly exceed 1.0 due to float32 rounding
+    lhat = min(float(lhat), 1.0)
     risk_fdr = risk_fn(sims, labels, lhat)
     return lhat, risk_fdr
 

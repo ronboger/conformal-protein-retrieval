@@ -68,6 +68,9 @@ web_image = (
     .add_local_file("results/fdr_thresholds.csv", remote_path="/app/results/fdr_thresholds.csv")
     .add_local_file("results/fnr_thresholds.csv", remote_path="/app/results/fnr_thresholds.csv")
     .add_local_file("results/calibration_probs.csv", remote_path="/app/results/calibration_probs.csv")
+    .add_local_file("results/fdr_thresholds_partial.csv", remote_path="/app/results/fdr_thresholds_partial.csv")
+    .add_local_file("results/fnr_thresholds_partial.csv", remote_path="/app/results/fnr_thresholds_partial.csv")
+    .add_local_file("data/gene_unknown/unknown_aa_seqs.fasta", remote_path="/app/bundled/syn30.fasta")
 )
 
 # ---------------------------------------------------------------------------
@@ -144,6 +147,7 @@ def _ensure_lookup_data():
         "data/lookup_embeddings_meta_data.tsv",
         "data/lookup/scope_lookup_embeddings.npy",
         "data/lookup/scope_lookup.fasta",
+        "data/gene_unknown/unknown_aa_seqs.fasta",
     ]
     for repo_path in data_files:
         try:

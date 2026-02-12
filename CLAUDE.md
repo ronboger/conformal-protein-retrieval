@@ -117,6 +117,29 @@
 
 ## Development Log
 
+### 2026-02-11 - Gradio UI/UX Overhaul (Phase A + B)
+
+**Completed:**
+- Phase A: Mounted partial threshold CSVs in Modal, clamped FDR threshold to [0,1], renamed "UniProt" → "Swiss-Prot (540K)"
+- Phase B: Per-query dropdown filter, dual exact/partial Pfam probabilities, Probability Filter mode, hide uncharacterized checkbox, Syn3.0 full 149-protein FASTA, embedding + FAISS result caching, probability vs. rank line plot, "Save Embeddings (.npy)" button, detail panel for full sequences/metadata
+- Fixed: float32 artifact where `sims.max()` = 1.000000238 (clamped with `min(lhat, 1.0)`)
+- Fixed: `raw_matches` now calibrated before caching so probability plot has real data
+- Fixed: `filter_by_query` TypeError (wrong args to `_build_prob_plot`)
+- Removed α=0.001 from dropdown (threshold always hits >1.0)
+
+**Open issue — Table cell clipping (see HANDOFF.md):**
+- User wants Google Sheets-like cell behavior: clipped text, click to expand in-place
+- `wrap=False` doesn't constrain column width in Gradio 5 — cells expand to fit content
+- CSS `table-layout: fixed` didn't work — Gradio 5 scoped styles override external CSS
+- Current workaround: explicit string truncation with "…" (readable but loses click-to-expand)
+- **Next step**: Try JavaScript via `gr.Blocks(js=...)` for inline styles (highest specificity)
+- See `HANDOFF.md` for full details and untried approaches
+
+**Branch:** `gradio` (all changes uncommitted)
+**Deploy:** `modal deploy modal_app.py`
+
+---
+
 ### 2026-02-03 - Cleanup & Consolidation
 
 **Completed:**
@@ -187,3 +210,18 @@ scancel JOBID                       # Cancel a job
 - Use numpy for numerical operations
 - Use FAISS for similarity search
 - Notebooks for analysis, package for algorithms
+
+### Gradio 5 Gotchas
+- **`wrap=False` does NOT clip text** — it only sets `white-space: nowrap`. Columns still expand to fit content. You MUST also constrain column width for clipping to work.
+- **External CSS often doesn't work** — Gradio 5 uses scoped Svelte styles that override external CSS even with `!important`. Use `gr.Blocks(js=...)` with inline styles via JavaScript instead.
+- **`interactive=True` on Dataframe** — clicking a cell enters edit mode, showing full content. This IS the click-to-expand behavior if the initial display is clipped.
+- **Modal symlink gotcha** — Don't bake files into `/app/data/` (it creates a real directory that blocks the `/app/data -> /vol/data` symlink). Use `/app/bundled/` instead.
+- **Test on compute nodes** — `pytest tests/` takes ~5 min, prefer SLURM `standard` partition.
+- **Gradio version** — Modal installs `gradio>=5.0.0`. Check specific version behavior before assuming CSS/JS patterns work.
+
+### Modal Deployment
+- `modal deploy modal_app.py` — takes ~2s, deploys Gradio + GPU embedder
+- Container idle timeout: 20 min (`scaledown_window=60*20`)
+- First request after cold start: downloads ~1GB lookup embeddings from HuggingFace → builds FAISS index → slow. Subsequent requests within same container are fast (in-memory cache).
+- Baked files: `results/*.csv`, `protein_conformal/`, `data/gene_unknown/unknown_aa_seqs.fasta` (at `/app/bundled/syn30.fasta`)
+- Volume (`/vol`): lookup embeddings, metadata TSV, Protein-Vec models, HF cache
