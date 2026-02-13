@@ -17,6 +17,7 @@ import logging
 import shutil
 import time
 import threading
+import inspect
 from functools import lru_cache
 import pandas as pd
 from Bio import SeqIO
@@ -26,6 +27,22 @@ from protein_conformal.util import load_database, query, read_fasta, get_sims_la
 
 
 logger = logging.getLogger(__name__)
+
+RESULTS_TABLE_MAX_CHARS = 28
+RESULTS_TABLE_COLUMN_WIDTHS = ["150px", "100px", "180px", "200px", "100px", "200px", "110px", "110px"]
+RESULTS_TABLE_STATIC_COLUMNS = list(range(32))
+try:
+    DATAFRAME_SUPPORTS_MAX_CHARS = "max_chars" in inspect.signature(gr.Dataframe.__init__).parameters
+except Exception:
+    DATAFRAME_SUPPORTS_MAX_CHARS = False
+try:
+    DATAFRAME_SUPPORTS_COLUMN_WIDTHS = "column_widths" in inspect.signature(gr.Dataframe.__init__).parameters
+except Exception:
+    DATAFRAME_SUPPORTS_COLUMN_WIDTHS = False
+try:
+    DATAFRAME_SUPPORTS_STATIC_COLUMNS = "static_columns" in inspect.signature(gr.Dataframe.__init__).parameters
+except Exception:
+    DATAFRAME_SUPPORTS_STATIC_COLUMNS = False
 
 
 def _download_from_dataset(path: str) -> str:
@@ -917,8 +934,8 @@ def _process_input_impl(stage_timer: StageTimer,
             "lookup_entry": "UniProt Entry",
             "lookup_pfam": "Pfam",
             "lookup_protein_names": "Protein Name(s)",
-            "prob_exact": "Exact Match Prob",
-            "prob_partial": "Partial Match Prob",
+            "prob_exact": "Exact Prob",
+            "prob_partial": "Partial Prob",
         }
         preferred_order = [
             "query_meta",
@@ -1064,7 +1081,7 @@ def create_interface():
         font-weight: 600;
     }
 
-    /* Results table: clip long text with ellipsis, fixed column widths */
+    /* Keep rows compact while allowing click expansion to stay single-line. */
     #results-table table {
         table-layout: fixed !important;
         width: 100% !important;
@@ -1076,39 +1093,22 @@ def create_interface():
         white-space: nowrap !important;
         max-width: 250px !important;
     }
-    #results-table table td:hover {
-        cursor: default;
+    #results-table textarea,
+    #results-table input,
+    #results-table [contenteditable="true"] {
+        white-space: nowrap !important;
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+        line-height: 1.35 !important;
+        min-height: 2.1em !important;
+        max-height: 2.1em !important;
+        height: 2.1em !important;
+        resize: none !important;
     }
 
     """
 
-    # JS to enforce cell clipping via inline styles (highest specificity, survives Gradio scoped CSS)
-    custom_js = """
-    () => {
-        const applyTableStyles = () => {
-            const el = document.getElementById('results-table');
-            if (!el) return;
-            const table = el.querySelector('table');
-            if (table) {
-                table.style.tableLayout = 'fixed';
-                table.style.width = '100%';
-            }
-            el.querySelectorAll('table td, table th').forEach(cell => {
-                cell.style.overflow = 'hidden';
-                cell.style.textOverflow = 'ellipsis';
-                cell.style.whiteSpace = 'nowrap';
-                cell.style.maxWidth = '250px';
-            });
-        };
-        // Run on load and observe for dynamic table updates
-        applyTableStyles();
-        const observer = new MutationObserver(applyTableStyles);
-        const target = document.getElementById('results-table');
-        if (target) observer.observe(target, {childList: true, subtree: true});
-    }
-    """
-
-    with gr.Blocks(title="Conformal Protein Retrieval", css=custom_css, js=custom_js, theme=gr.themes.Soft()) as interface:
+    with gr.Blocks(title="Conformal Protein Retrieval", css=custom_css, theme=gr.themes.Soft()) as interface:
         # Header
         gr.HTML("""
         <div style="text-align: center; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; margin-bottom: 20px;">
@@ -1257,13 +1257,20 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
 
                 with gr.Row():
                     with gr.Column(scale=2):
-                        results_table = gr.Dataframe(
-                            label="Matches (click a row for full details →)",
-                            wrap=False,
-                            interactive=False,
-                            elem_id="results-table",
-                            column_widths=["150px", "100px", "180px", "200px", "100px", "200px", "110px", "110px"],
-                        )
+                        results_table_kwargs = {
+                            "label": "Matches (click a cell to expand, click a row for full details)",
+                            "wrap": False,
+                            "interactive": True,
+                            "elem_id": "results-table",
+                        }
+                        if DATAFRAME_SUPPORTS_MAX_CHARS:
+                            results_table_kwargs["max_chars"] = RESULTS_TABLE_MAX_CHARS
+                        if DATAFRAME_SUPPORTS_COLUMN_WIDTHS:
+                            results_table_kwargs["column_widths"] = RESULTS_TABLE_COLUMN_WIDTHS
+                        if DATAFRAME_SUPPORTS_STATIC_COLUMNS:
+                            # Keep click-to-expand while preventing edits in all visible columns.
+                            results_table_kwargs["static_columns"] = RESULTS_TABLE_STATIC_COLUMNS
+                        results_table = gr.Dataframe(**results_table_kwargs)
 
                     with gr.Column(scale=1):
                         sequence_detail = gr.Code(
@@ -1289,7 +1296,7 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                         export_download = gr.File(label="Download", interactive=False)
 
                 prob_plot = gr.Plot(
-                    label="Match Probability vs. Rank",
+                    label="Match Probability vs. Ordered Hit Rank (1 = top hit)",
                     visible=False,
                 )
 
@@ -1433,6 +1440,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 mode="lines",
                 name="Exact match",
                 line=dict(color="rgba(102, 126, 234, 0.9)", width=2),
+                hovertemplate="Ordered hit rank: %{x}<br>Exact probability: %{y:.3f}<extra></extra>",
             ))
             if len(partial_probs) == len(ranks):
                 fig.add_trace(go.Scatter(
@@ -1441,20 +1449,22 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                     mode="lines",
                     name="Partial match",
                     line=dict(color="rgba(118, 75, 162, 0.9)", width=2),
+                    hovertemplate="Ordered hit rank: %{x}<br>Partial probability: %{y:.3f}<extra></extra>",
                 ))
 
-            title = "Exact/Partial Match Probability vs. Rank"
+            title_main = "Exact/Partial Match Probability vs. Ordered Hit Rank"
             if query_label and query_label != "All queries":
                 ql = query_label if len(query_label) <= 50 else query_label[:47] + "..."
-                title = f"Match Probability vs. Rank — {ql}"
+                title_main = f"Match Probability vs. Ordered Hit Rank — {ql}"
+            title = f"{title_main}<br><sup>Hits are sorted by similarity (D_score); rank 1 is the top hit.</sup>"
 
             fig.update_layout(
                 title=title,
-                xaxis_title="Rank (k)",
+                xaxis_title="Ordered Hit Rank (k; 1 = highest similarity)",
                 yaxis_title="Calibrated Probability",
                 yaxis_range=[0, 1.05],
                 height=350,
-                margin=dict(l=50, r=20, t=50, b=40),
+                margin=dict(l=50, r=20, t=80, b=40),
                 template="plotly_white",
                 legend=dict(yanchor="top", y=0.98, xanchor="right", x=0.98),
             )
@@ -1527,8 +1537,8 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 "lookup_entry": "UniProt Entry",
                 "lookup_pfam": "Pfam",
                 "lookup_protein_names": "Protein Name(s)",
-                "prob_exact": "Exact Match Prob",
-                "prob_partial": "Partial Match Prob",
+                "prob_exact": "Exact Prob",
+                "prob_partial": "Partial Prob",
             }
             preferred_order = [
                 "query_meta", "lookup_entry", "lookup_protein_names",
@@ -1554,18 +1564,102 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
             outputs=[results_table, sequence_detail, prob_plot],
         )
 
-        # Row selection → show full sequences from session (table has truncated versions)
+        display_to_match_key = {
+            "Query": "query_meta",
+            "Match Sequence": "lookup_seq",
+            "UniProt Entry": "lookup_entry",
+            "Protein Name(s)": "lookup_protein_names",
+            "Pfam": "lookup_pfam",
+            "Match Description": "lookup_meta",
+            "Exact Prob": "prob_exact",
+            "Partial Prob": "prob_partial",
+            "Exact Match Prob": "prob_exact",
+            "Partial Match Prob": "prob_partial",
+        }
+
+        def normalize_value(value):
+            if value is None:
+                return ""
+            try:
+                if pd.isna(value):
+                    return ""
+            except Exception:
+                pass
+            return str(value).strip()
+
+        def row_dict_from_event(df, evt: gr.SelectData, row_idx: int) -> Dict[str, Any]:
+            row_value = getattr(evt, "row_value", None)
+            if isinstance(row_value, dict):
+                return row_value
+            if isinstance(row_value, (list, tuple)):
+                return {
+                    col: row_value[i] if i < len(row_value) else None
+                    for i, col in enumerate(df.columns)
+                }
+            if 0 <= row_idx < len(df):
+                return df.iloc[row_idx].to_dict()
+            return {}
+
+        def parse_selection_row_index(evt: gr.SelectData) -> int:
+            row_idx = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
+            if not isinstance(row_idx, int):
+                try:
+                    row_idx = int(row_idx)
+                except (TypeError, ValueError):
+                    row_idx = -1
+            return row_idx
+
+        def find_full_match(display_row: Dict[str, Any], matches: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+            if not display_row or not matches:
+                return None
+
+            selected = {}
+            for display_col, match_key in display_to_match_key.items():
+                if display_col not in display_row:
+                    continue
+                normalized = normalize_value(display_row.get(display_col))
+                if normalized:
+                    selected[match_key] = normalized
+
+            if not selected:
+                return None
+
+            match_keys = [
+                "query_meta",
+                "lookup_entry",
+                "lookup_seq",
+                "lookup_protein_names",
+                "lookup_pfam",
+                "lookup_meta",
+            ]
+            candidates = matches
+            for key in match_keys:
+                selected_value = selected.get(key)
+                if not selected_value:
+                    continue
+                narrowed = [m for m in candidates if normalize_value(m.get(key)) == selected_value]
+                if narrowed:
+                    candidates = narrowed
+
+            return candidates[0] if candidates else None
+
+        # Row selection → show full sequences from session
         def on_row_select(df, evt: gr.SelectData):
             if df is None or df.empty:
                 return gr.Code(visible=False, value="")
-            row_idx = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
-            if row_idx >= len(df):
-                return gr.Code(visible=False, value="")
-            # Try to get full data from session
+
+            row_idx = parse_selection_row_index(evt)
+            display_row = row_dict_from_event(df, evt, row_idx)
+
             global CURRENT_SESSION
             matches = (CURRENT_SESSION or {}).get("results", {}).get("matches", [])
-            if row_idx < len(matches):
+
+            m = find_full_match(display_row, matches)
+            if m is None and 0 <= row_idx < len(matches):
+                # Best-effort fallback for older Gradio event payloads.
                 m = matches[row_idx]
+
+            if m:
                 parts = []
                 if m.get("lookup_protein_names"):
                     parts.append(f"Protein: {m['lookup_protein_names']}")
@@ -1573,6 +1667,24 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                     parts.append(f"Entry: {m['lookup_entry']}")
                 if m.get("lookup_pfam"):
                     parts.append(f"Pfam: {m['lookup_pfam']}")
+                exact_prob = m.get("prob_exact")
+                if not exact_prob and m.get("p0") is not None and m.get("p1") is not None:
+                    mean_e = (float(m["p0"]) + float(m["p1"])) / 2.0
+                    half_e = abs(float(m["p1"]) - float(m["p0"])) / 2.0
+                    exact_prob = f"{mean_e:.3f} ± {half_e:.3f}"
+                partial_prob = m.get("prob_partial")
+                if (
+                    not partial_prob
+                    and m.get("p0_partial") is not None
+                    and m.get("p1_partial") is not None
+                ):
+                    mean_p = (float(m["p0_partial"]) + float(m["p1_partial"])) / 2.0
+                    half_p = abs(float(m["p1_partial"]) - float(m["p0_partial"])) / 2.0
+                    partial_prob = f"{mean_p:.3f} ± {half_p:.3f}"
+                if exact_prob:
+                    parts.append(f"Exact Prob: {exact_prob}")
+                if partial_prob:
+                    parts.append(f"Partial Prob: {partial_prob}")
                 if m.get("query_meta"):
                     parts.append(f"\nQuery: {m['query_meta']}")
                 if m.get("query_seq"):
@@ -1581,9 +1693,10 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                     parts.append(f"\nMatch Sequence:\n{m['lookup_seq']}")
                 text = "\n".join(parts)
             else:
-                # Fallback to display table row
-                row = df.iloc[row_idx]
-                parts = [f"{col}: {row[col]}" for col in row.index if row[col]]
+                # Fallback to display table row.
+                if not display_row and 0 <= row_idx < len(df):
+                    display_row = df.iloc[row_idx].to_dict()
+                parts = [f"{col}: {value}" for col, value in display_row.items() if normalize_value(value)]
                 text = "\n\n".join(parts) if parts else "No detail available"
             return gr.Code(visible=True, value=text)
 
