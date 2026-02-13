@@ -37,6 +37,10 @@ try:
     DATAFRAME_SUPPORTS_COLUMN_WIDTHS = "column_widths" in inspect.signature(gr.Dataframe.__init__).parameters
 except Exception:
     DATAFRAME_SUPPORTS_COLUMN_WIDTHS = False
+try:
+    DATAFRAME_SUPPORTS_STATIC_COLUMNS = "static_columns" in inspect.signature(gr.Dataframe.__init__).parameters
+except Exception:
+    DATAFRAME_SUPPORTS_STATIC_COLUMNS = False
 
 # Preferred display widths (in px) for default visible columns:
 # Query, UniProt Entry, Protein Name(s), Match Sequence, Pfam, Match Description, Exact Prob, Partial Prob
@@ -1252,6 +1256,9 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                             results_table_kwargs["max_chars"] = RESULTS_TABLE_MAX_CHARS
                         if DATAFRAME_SUPPORTS_COLUMN_WIDTHS:
                             results_table_kwargs["column_widths"] = RESULTS_TABLE_COLUMN_WIDTHS
+                        if DATAFRAME_SUPPORTS_STATIC_COLUMNS:
+                            # Keep selection/click behavior while disabling in-cell editing.
+                            results_table_kwargs["static_columns"] = list(range(32))
                         results_table = gr.Dataframe(**results_table_kwargs)
 
                     with gr.Column(scale=1):
