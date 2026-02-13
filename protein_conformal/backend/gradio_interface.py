@@ -17,6 +17,7 @@ import logging
 import shutil
 import time
 import threading
+import inspect
 from functools import lru_cache
 import pandas as pd
 from Bio import SeqIO
@@ -26,6 +27,20 @@ from protein_conformal.util import load_database, query, read_fasta, get_sims_la
 
 
 logger = logging.getLogger(__name__)
+
+RESULTS_TABLE_MAX_CHARS = 28
+try:
+    DATAFRAME_SUPPORTS_MAX_CHARS = "max_chars" in inspect.signature(gr.Dataframe.__init__).parameters
+except Exception:
+    DATAFRAME_SUPPORTS_MAX_CHARS = False
+try:
+    DATAFRAME_SUPPORTS_COLUMN_WIDTHS = "column_widths" in inspect.signature(gr.Dataframe.__init__).parameters
+except Exception:
+    DATAFRAME_SUPPORTS_COLUMN_WIDTHS = False
+
+# Preferred display widths (in px) for default visible columns:
+# Query, UniProt Entry, Protein Name(s), Match Sequence, Pfam, Match Description, Exact Prob, Partial Prob
+RESULTS_TABLE_COLUMN_WIDTHS = [280, 120, 220, 210, 180, 220, 135, 135]
 
 
 def _download_from_dataset(path: str) -> str:
@@ -917,8 +932,8 @@ def _process_input_impl(stage_timer: StageTimer,
             "lookup_entry": "UniProt Entry",
             "lookup_pfam": "Pfam",
             "lookup_protein_names": "Protein Name(s)",
-            "prob_exact": "Exact Match Prob",
-            "prob_partial": "Partial Match Prob",
+            "prob_exact": "Exact Prob",
+            "prob_partial": "Partial Prob",
         }
         preferred_order = [
             "query_meta",
@@ -931,19 +946,12 @@ def _process_input_impl(stage_timer: StageTimer,
             "prob_partial",
         ]
         HIDDEN_COLS = {"D_score", "p0", "p1", "p0_partial", "p1_partial", "query_seq"}
-        TRUNCATE = {"query_meta": 50, "lookup_seq": 40, "lookup_meta": 50,
-                     "lookup_protein_names": 40}
         if not results_df.empty:
             display_columns = [col for col in preferred_order if col in results_df.columns
                                and col not in HIDDEN_COLS]
             display_columns.extend([col for col in results_df.columns if col not in display_columns
                                     and col not in HIDDEN_COLS])
             display_df = results_df.reindex(columns=display_columns).copy()
-            for col, lim in TRUNCATE.items():
-                if col in display_df.columns:
-                    display_df[col] = display_df[col].apply(
-                        lambda v, _l=lim: (str(v)[:_l] + "\u2026") if isinstance(v, str) and len(v) > _l else v
-                    )
             display_df = display_df.rename(columns=display_header_map)
         else:
             display_df = pd.DataFrame()
@@ -1069,6 +1077,18 @@ def create_interface():
         margin: 16px 0 12px 0;
         font-size: 1.1em;
         font-weight: 600;
+    }
+
+    /* Keep inline dataframe editor compact: no row blow-up on long cell values. */
+    #results-table textarea,
+    #results-table [contenteditable="true"] {
+        white-space: nowrap !important;
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+        line-height: 1.35 !important;
+        min-height: 2.1em !important;
+        max-height: 2.1em !important;
+        height: 2.1em !important;
     }
 
     """
@@ -1222,12 +1242,17 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
 
                 with gr.Row():
                     with gr.Column(scale=2):
-                        results_table = gr.Dataframe(
-                            label="Matches (click a cell to expand, click a row for full details)",
-                            wrap=False,
-                            interactive=True,
-                            elem_id="results-table",
-                        )
+                        results_table_kwargs = {
+                            "label": "Matches (click a cell to expand, click a row for full details)",
+                            "wrap": False,
+                            "interactive": True,
+                            "elem_id": "results-table",
+                        }
+                        if DATAFRAME_SUPPORTS_MAX_CHARS:
+                            results_table_kwargs["max_chars"] = RESULTS_TABLE_MAX_CHARS
+                        if DATAFRAME_SUPPORTS_COLUMN_WIDTHS:
+                            results_table_kwargs["column_widths"] = RESULTS_TABLE_COLUMN_WIDTHS
+                        results_table = gr.Dataframe(**results_table_kwargs)
 
                     with gr.Column(scale=1):
                         sequence_detail = gr.Code(
@@ -1253,7 +1278,7 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                         export_download = gr.File(label="Download", interactive=False)
 
                 prob_plot = gr.Plot(
-                    label="Match Probability vs. Rank",
+                    label="Match Probability vs. Ordered Hit Rank (1 = top hit)",
                     visible=False,
                 )
 
@@ -1365,7 +1390,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
 
         # --- Probability vs. rank plot helper ---
         def _build_prob_plot(query_label=None):
-            """Build a line plot of exact/partial match probability vs. rank (1..k)
+            """Build a line plot of exact/partial match probability vs ordered hit rank (1..k)
             using all raw matches from the cache (before threshold filtering)."""
             global CURRENT_SESSION
             raw = (CURRENT_SESSION or {}).get("_cache", {}).get("raw_matches", [])
@@ -1397,6 +1422,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 mode="lines",
                 name="Exact match",
                 line=dict(color="rgba(102, 126, 234, 0.9)", width=2),
+                hovertemplate="Ordered hit rank: %{x}<br>Exact probability: %{y:.3f}<extra></extra>",
             ))
             if len(partial_probs) == len(ranks):
                 fig.add_trace(go.Scatter(
@@ -1405,20 +1431,24 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                     mode="lines",
                     name="Partial match",
                     line=dict(color="rgba(118, 75, 162, 0.9)", width=2),
+                    hovertemplate="Ordered hit rank: %{x}<br>Partial probability: %{y:.3f}<extra></extra>",
                 ))
 
-            title = "Exact/Partial Match Probability vs. Rank"
+            title_main = "Exact/Partial Match Probability vs. Ordered Hit Rank"
             if query_label and query_label != "All queries":
                 ql = query_label if len(query_label) <= 50 else query_label[:47] + "..."
-                title = f"Match Probability vs. Rank — {ql}"
+                title_main = f"Match Probability vs. Ordered Hit Rank — {ql}"
+            title = (
+                f"{title_main}<br><sup>Hits are sorted by similarity (D_score); rank 1 is the top hit.</sup>"
+            )
 
             fig.update_layout(
                 title=title,
-                xaxis_title="Rank (k)",
+                xaxis_title="Ordered Hit Rank (k; 1 = highest similarity)",
                 yaxis_title="Calibrated Probability",
                 yaxis_range=[0, 1.05],
                 height=350,
-                margin=dict(l=50, r=20, t=50, b=40),
+                margin=dict(l=50, r=20, t=80, b=40),
                 template="plotly_white",
                 legend=dict(yanchor="top", y=0.98, xanchor="right", x=0.98),
             )
@@ -1491,8 +1521,8 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 "lookup_entry": "UniProt Entry",
                 "lookup_pfam": "Pfam",
                 "lookup_protein_names": "Protein Name(s)",
-                "prob_exact": "Exact Match Prob",
-                "prob_partial": "Partial Match Prob",
+                "prob_exact": "Exact Prob",
+                "prob_partial": "Partial Prob",
             }
             preferred_order = [
                 "query_meta", "lookup_entry", "lookup_protein_names",
@@ -1500,24 +1530,21 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 "prob_exact", "prob_partial",
             ]
             HIDDEN_COLS = {"D_score", "p0", "p1", "p0_partial", "p1_partial", "query_seq"}
-            TRUNCATE = {"query_meta": 50, "lookup_seq": 40, "lookup_meta": 50,
-                         "lookup_protein_names": 40}
             display_columns = [col for col in preferred_order if col in df.columns
                                and col not in HIDDEN_COLS]
             display_columns.extend([col for col in df.columns if col not in display_columns
                                     and col not in HIDDEN_COLS])
             display_df = df.reindex(columns=display_columns).copy()
-            for col, lim in TRUNCATE.items():
-                if col in display_df.columns:
-                    display_df[col] = display_df[col].apply(
-                        lambda v, _l=lim: (str(v)[:_l] + "\u2026") if isinstance(v, str) and len(v) > _l else v
-                    )
             display_df = display_df.rename(columns=display_header_map)
 
             # Build probability plot for the filtered query
             plot_label = query_choice if query_choice and query_choice != "All queries" else None
             fig = _build_prob_plot(query_label=plot_label)
-            return display_df, gr.Code(visible=False, value=""), gr.Plot(value=fig, visible=fig is not None)
+            return (
+                display_df,
+                gr.Code(visible=False, value=""),
+                gr.Plot(value=fig, visible=fig is not None),
+            )
 
         query_filter.change(
             fn=filter_by_query,
@@ -1525,18 +1552,116 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
             outputs=[results_table, sequence_detail, prob_plot],
         )
 
-        # Row selection → show full sequences from session (table has truncated versions)
+        display_to_match_key = {
+            "Query": "query_meta",
+            "Match Sequence": "lookup_seq",
+            "UniProt Entry": "lookup_entry",
+            "Protein Name(s)": "lookup_protein_names",
+            "Pfam": "lookup_pfam",
+            "Match Description": "lookup_meta",
+            "Exact Prob": "prob_exact",
+            "Partial Prob": "prob_partial",
+            "Exact Match Prob": "prob_exact",
+            "Partial Match Prob": "prob_partial",
+        }
+
+        def normalize_value(value):
+            if value is None:
+                return ""
+            try:
+                if pd.isna(value):
+                    return ""
+            except Exception:
+                pass
+            return str(value).strip()
+
+        def row_dict_from_event(df, evt: gr.SelectData, row_idx: int) -> Dict[str, Any]:
+            row_value = getattr(evt, "row_value", None)
+            if isinstance(row_value, dict):
+                return row_value
+            if isinstance(row_value, (list, tuple)):
+                return {
+                    col: row_value[i] if i < len(row_value) else None
+                    for i, col in enumerate(df.columns)
+                }
+            if 0 <= row_idx < len(df):
+                return df.iloc[row_idx].to_dict()
+            return {}
+
+        def parse_selection_indices(evt: gr.SelectData) -> Tuple[int, int]:
+            row_idx, col_idx = -1, -1
+            index = getattr(evt, "index", None)
+            if isinstance(index, (list, tuple)):
+                if len(index) >= 1:
+                    row_idx = index[0]
+                if len(index) >= 2:
+                    col_idx = index[1]
+            else:
+                row_idx = index
+
+            try:
+                row_idx = int(row_idx)
+            except (TypeError, ValueError):
+                row_idx = -1
+            try:
+                col_idx = int(col_idx)
+            except (TypeError, ValueError):
+                col_idx = -1
+
+            return row_idx, col_idx
+
+        def find_full_match(display_row: Dict[str, Any], matches: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+            if not display_row or not matches:
+                return None
+
+            selected = {}
+            for display_col, match_key in display_to_match_key.items():
+                if display_col not in display_row:
+                    continue
+                normalized = normalize_value(display_row.get(display_col))
+                if normalized:
+                    selected[match_key] = normalized
+
+            if not selected:
+                return None
+
+            match_keys = [
+                "query_meta",
+                "lookup_entry",
+                "lookup_seq",
+                "lookup_protein_names",
+                "lookup_pfam",
+                "lookup_meta",
+            ]
+            candidates = matches
+            for key in match_keys:
+                selected_value = selected.get(key)
+                if not selected_value:
+                    continue
+                narrowed = [m for m in candidates if normalize_value(m.get(key)) == selected_value]
+                if narrowed:
+                    candidates = narrowed
+
+            return candidates[0] if candidates else None
+
+        # Row selection → show full sequences from session
         def on_row_select(df, evt: gr.SelectData):
             if df is None or df.empty:
                 return gr.Code(visible=False, value="")
-            row_idx = evt.index[0] if isinstance(evt.index, (list, tuple)) else evt.index
-            if row_idx >= len(df):
-                return gr.Code(visible=False, value="")
-            # Try to get full data from session
+
+            row_idx, _ = parse_selection_indices(evt)
+
+            display_row = row_dict_from_event(df, evt, row_idx)
+
             global CURRENT_SESSION
             matches = (CURRENT_SESSION or {}).get("results", {}).get("matches", [])
-            if row_idx < len(matches):
+
+            m = find_full_match(display_row, matches)
+            if m is None and 0 <= row_idx < len(matches):
+                # Best-effort fallback for older Gradio event payloads
                 m = matches[row_idx]
+
+            if m:
                 parts = []
                 if m.get("lookup_protein_names"):
                     parts.append(f"Protein: {m['lookup_protein_names']}")
@@ -1544,6 +1669,24 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                     parts.append(f"Entry: {m['lookup_entry']}")
                 if m.get("lookup_pfam"):
                     parts.append(f"Pfam: {m['lookup_pfam']}")
+                exact_prob = m.get("prob_exact")
+                if not exact_prob and m.get("p0") is not None and m.get("p1") is not None:
+                    mean_e = (float(m["p0"]) + float(m["p1"])) / 2.0
+                    half_e = abs(float(m["p1"]) - float(m["p0"])) / 2.0
+                    exact_prob = f"{mean_e:.3f} ± {half_e:.3f}"
+                partial_prob = m.get("prob_partial")
+                if (
+                    not partial_prob
+                    and m.get("p0_partial") is not None
+                    and m.get("p1_partial") is not None
+                ):
+                    mean_p = (float(m["p0_partial"]) + float(m["p1_partial"])) / 2.0
+                    half_p = abs(float(m["p1_partial"]) - float(m["p0_partial"])) / 2.0
+                    partial_prob = f"{mean_p:.3f} ± {half_p:.3f}"
+                if exact_prob:
+                    parts.append(f"Exact Prob: {exact_prob}")
+                if partial_prob:
+                    parts.append(f"Partial Prob: {partial_prob}")
                 if m.get("query_meta"):
                     parts.append(f"\nQuery: {m['query_meta']}")
                 if m.get("query_seq"):
@@ -1553,9 +1696,11 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 text = "\n".join(parts)
             else:
                 # Fallback to display table row
-                row = df.iloc[row_idx]
-                parts = [f"{col}: {row[col]}" for col in row.index if row[col]]
+                if not display_row and 0 <= row_idx < len(df):
+                    display_row = df.iloc[row_idx].to_dict()
+                parts = [f"{col}: {value}" for col, value in display_row.items() if normalize_value(value)]
                 text = "\n\n".join(parts) if parts else "No detail available"
+
             return gr.Code(visible=True, value=text)
 
         results_table.select(

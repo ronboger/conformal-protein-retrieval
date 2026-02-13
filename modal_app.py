@@ -9,6 +9,8 @@ Architecture:
 See MODAL_DEPLOY.md for full setup instructions.
 """
 
+import os
+
 import modal
 
 app = modal.App("cpr-gradio")
@@ -20,6 +22,8 @@ VOLUME_PATH = "/vol"
 HF_CACHE = f"{VOLUME_PATH}/hf_cache"
 PVM_DIR = f"{VOLUME_PATH}/protein_vec_models"
 VOL_DATA = f"{VOLUME_PATH}/data"
+HF_DATASET_ID = os.getenv("HF_DATASET_ID", "LoocasGoose/cpr_data")
+dataset_config_secret = modal.Secret.from_dict({"HF_DATASET_ID": HF_DATASET_ID})
 
 # ---------------------------------------------------------------------------
 # Container images
@@ -76,8 +80,6 @@ web_image = (
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
-
-HF_DATASET_ID = "LoocasGoose/cpr_data"
 
 
 def _download_hf_file(repo_path: str, local_dir: str):
@@ -165,6 +167,7 @@ def _ensure_lookup_data():
     gpu="T4",
     timeout=600,
     volumes={VOLUME_PATH: volume},
+    secrets=[dataset_config_secret],
 )
 class Embedder:
     """GPU-accelerated protein embedding using ProtTrans + Protein-Vec."""
@@ -243,6 +246,7 @@ class Embedder:
     min_containers=0,
     scaledown_window=60 * 20,  # 20 min idle before shutdown
     volumes={VOLUME_PATH: volume},
+    secrets=[dataset_config_secret],
 )
 @modal.concurrent(max_inputs=100)
 @modal.asgi_app()
