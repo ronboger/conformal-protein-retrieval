@@ -178,6 +178,13 @@ DEFAULT_CALIBRATION_DATA = "./results/calibration_probs.csv" # default path to t
 DEFAULT_SCOPE_EMBEDDING = "./data/lookup/scope_lookup_embeddings.npy" # default path to the SCOPE lookup embeddings
 DEFAULT_SCOPE_METADATA = "./data/lookup/scope_lookup.fasta" # default path to the SCOPE lookup metadata
 
+DEFAULT_AFDB_EMBEDDING = "./data/afdb/afdb_embeddings_protein_vec.npy" # default path to the AFDB lookup embeddings
+DEFAULT_AFDB_METADATA = "./data/afdb/afdb_metadata.tsv" # default path to the AFDB lookup metadata
+
+DEFAULT_CLEAN_CENTROID_EMBEDDING = "./data/clean/ec_centroid_embeddings.npy" # CLEAN EC centroid embeddings
+DEFAULT_CLEAN_CENTROID_METADATA = "./data/clean/ec_centroid_metadata.tsv" # CLEAN EC centroid metadata
+DEFAULT_CLEAN_THRESHOLDS = "./results/clean_thresholds.csv" # CLEAN hierarchical thresholds
+
 # Paths used for temporary storage of uploaded database files
 CUSTOM_UPLOAD_EMBEDDING = "./data/custom_uploaded_embedding.npy" # path to the custom uploaded embeddings
 CUSTOM_UPLOAD_METADATA = "./data/custom_uploaded_metadata.tsv" # path to the custom uploaded metadata
@@ -425,6 +432,187 @@ def run_embed_protein_vec(sequences: List[str], progress=gr.Progress()) -> np.nd
             os.unlink(tmp_fasta_path)
         if os.path.exists(tmp_out_path):
             os.unlink(tmp_out_path)
+
+def run_embed_clean(sequences: List[str], progress=gr.Progress()) -> np.ndarray:
+    """Stub for CLEAN embedding (ESM-1b + LayerNormNet). Monkey-patched on Modal."""
+    raise NotImplementedError(
+        "CLEAN embedding requires GPU. Deploy with Modal or provide pre-computed embeddings."
+    )
+
+
+# CLEAN enzyme search resources cache
+CLEAN_RESOURCE_CACHE: Dict[str, Any] = {}
+CLEAN_RESOURCE_LOCK = threading.Lock()
+
+
+def get_clean_resources() -> Dict[str, Any]:
+    """Load CLEAN EC centroid embeddings and FAISS L2 index (cached)."""
+    import faiss
+
+    with CLEAN_RESOURCE_LOCK:
+        if CLEAN_RESOURCE_CACHE:
+            return CLEAN_RESOURCE_CACHE
+
+    emb_path = ensure_local_data_file(DEFAULT_CLEAN_CENTROID_EMBEDDING)
+    meta_path = ensure_local_data_file(DEFAULT_CLEAN_CENTROID_METADATA)
+
+    centroids = np.load(emb_path).astype(np.float32)
+    meta_df = pd.read_csv(meta_path, sep="\t")
+
+    # Build FAISS L2 index
+    d = centroids.shape[1]
+    index = faiss.IndexFlatL2(d)
+    index.add(centroids)
+
+    resource = {
+        "index": index,
+        "centroids": centroids,
+        "ec_numbers": meta_df["EC_number"].tolist(),
+        "n_proteins": meta_df["n_proteins"].tolist() if "n_proteins" in meta_df.columns else None,
+        "num_centroids": centroids.shape[0],
+    }
+
+    with CLEAN_RESOURCE_LOCK:
+        CLEAN_RESOURCE_CACHE.update(resource)
+
+    return resource
+
+
+def process_clean_input(
+    fasta_text: str,
+    upload_file: Optional[Any],
+    alpha_value: float,
+    progress=gr.Progress(),
+) -> Tuple[str, pd.DataFrame]:
+    """Process input for CLEAN enzyme classification mode."""
+    import json
+
+    stage_timer = StageTimer()
+
+    try:
+        # Step 1: Parse FASTA
+        with stage_timer.track("parse_input"):
+            sequences = []
+            query_meta = []
+            if upload_file is not None:
+                sequences, query_meta = process_uploaded_file(upload_file)
+            elif fasta_text and fasta_text.strip():
+                sequences, query_meta = parse_fasta(fasta_text)
+            else:
+                return json.dumps({"error": "No FASTA input provided."}, indent=2), pd.DataFrame()
+
+        if not sequences:
+            return json.dumps({"error": "No sequences found in FASTA input."}, indent=2), pd.DataFrame()
+
+        # Step 2: Embed with CLEAN (ESM-1b + LayerNormNet)
+        progress(0.1, desc="Embedding with ESM-1b + CLEAN...")
+        with stage_timer.track("clean_embedding"):
+            embeddings = run_embed_clean(sequences, progress)
+
+        # Step 3: Load CLEAN resources and search
+        progress(0.5, desc="Searching EC centroid database...")
+        with stage_timer.track("clean_search"):
+            resources = get_clean_resources()
+            index = resources["index"]
+            ec_numbers = resources["ec_numbers"]
+            n_proteins_list = resources["n_proteins"]
+            k = min(50, resources["num_centroids"])
+
+            D, I = index.search(embeddings, k)  # D = L2 distances, I = indices
+
+        # Step 4: Look up hierarchical threshold
+        progress(0.7, desc="Applying hierarchical conformal threshold...")
+        with stage_timer.track("threshold_lookup"):
+            threshold = None
+            try:
+                thresh_df = load_results_dataframe(
+                    DEFAULT_CLEAN_THRESHOLDS,
+                    required_columns=["alpha", "threshold_mean"],
+                )
+                closest_idx = (thresh_df["alpha"] - alpha_value).abs().idxmin()
+                threshold = float(thresh_df.iloc[closest_idx]["threshold_mean"])
+                actual_alpha = float(thresh_df.iloc[closest_idx]["alpha"])
+                test_loss = float(thresh_df.iloc[closest_idx].get("test_loss_mean", alpha_value))
+            except (FileNotFoundError, KeyError) as e:
+                logger.warning(f"CLEAN thresholds not available: {e}. Returning top-k results.")
+                threshold = None
+                actual_alpha = alpha_value
+                test_loss = None
+
+        # Step 5: Build results
+        progress(0.8, desc="Building results...")
+        with stage_timer.track("results_packaging"):
+            results = []
+            for i, (distances, indices) in enumerate(zip(D, I)):
+                for dist, idx in zip(distances, indices):
+                    if threshold is not None and dist > threshold:
+                        continue
+                    result = {
+                        "query_meta": query_meta[i] if i < len(query_meta) else f"seq_{i}",
+                        "ec_number": ec_numbers[idx],
+                        "distance": float(dist),
+                    }
+                    if n_proteins_list is not None:
+                        result["n_proteins_in_ec"] = n_proteins_list[idx]
+                    results.append(result)
+
+            results_df = pd.DataFrame(results) if results else pd.DataFrame()
+
+            summary = {
+                "status": "success",
+                "mode": "Enzyme Classification (CLEAN)",
+                "matches_found": len(results),
+                "hierarchical_guarantee": {
+                    "alpha": actual_alpha,
+                    "threshold": threshold,
+                    "meaning": f"Expected max hierarchical loss <= {actual_alpha:.1f}",
+                    "empirical_test_loss": test_loss,
+                },
+                "loss_level_guide": {
+                    "0": "Exact EC match",
+                    "1": "Same sub-subclass (4th digit differs)",
+                    "2": "Same subclass (3rd digit differs)",
+                    "3": "Same class (2nd digit differs)",
+                    "4": "Different class",
+                },
+            }
+            if threshold is None:
+                summary["warning"] = "No threshold table found. Showing top-k results without conformal guarantee."
+
+            # Format display DataFrame
+            if not results_df.empty:
+                display_header_map = {
+                    "query_meta": "Query",
+                    "ec_number": "Predicted EC",
+                    "distance": "L2 Distance",
+                    "n_proteins_in_ec": "# Proteins in EC",
+                }
+                TRUNCATE_CLEAN = {"query_meta": 50}
+                display_df = results_df.copy()
+                for col, lim in TRUNCATE_CLEAN.items():
+                    if col in display_df.columns:
+                        display_df[col] = display_df[col].apply(
+                            lambda v, _l=lim: (str(v)[:_l] + "\u2026") if isinstance(v, str) and len(v) > _l else v
+                        )
+                display_df = display_df.rename(columns=display_header_map)
+            else:
+                display_df = pd.DataFrame()
+
+            # Store in session for export
+            global CURRENT_SESSION
+            CURRENT_SESSION = {
+                "results": {"summary": summary, "matches": results, "threshold": threshold},
+                "parameters": {"mode": "clean", "alpha": alpha_value},
+            }
+
+        progress(1.0, desc="Enzyme classification complete!")
+        return json.dumps(summary, indent=2, default=str), display_df
+
+    except Exception as e:
+        return json.dumps({"error": f"Error during CLEAN search: {str(e)}"}, indent=2), pd.DataFrame()
+    finally:
+        stage_timer.log_summary()
+
 
 def validate_sequence(sequence: str) -> Tuple[bool, str]:
     """
@@ -709,6 +897,8 @@ def _process_input_impl(stage_timer: StageTimer,
             database_type = "Swiss-Prot"
         elif lookup_db == DEFAULT_SCOPE_EMBEDDING:
             database_type = "SCOPE"
+        elif lookup_db == DEFAULT_AFDB_EMBEDDING:
+            database_type = "AFDB (Clustered)"
 
         is_partial = match_type.lower() == "partial"
         match_type_label = "partial" if is_partial else "exact"
@@ -1010,8 +1200,8 @@ def export_current_results(format_type: str) -> Tuple[str, Optional[str]]:
         elif format_type == "json":
             with open(file_path, 'w') as f:
                 # For JSON export, we include the full result structure
-                json.dump(CURRENT_SESSION["results"], f, indent=2)
-                total_exported = CURRENT_SESSION["results"]["num_matches"]
+                json.dump(CURRENT_SESSION["results"], f, indent=2, default=str)
+                total_exported = len(CURRENT_SESSION["results"].get("matches", []))
         else:
             return json.dumps({"error": f"Unsupported format: {format_type}"}, indent=2), None
 
@@ -1115,7 +1305,7 @@ def create_interface():
         gr.HTML("""
         <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 14px 18px; margin: 10px 0; border-radius: 8px; color: white;">
             <strong>How it works:</strong> Enter protein sequences in FASTA format, choose FDR or FNR risk control,
-            and retrieve functionally similar proteins from Swiss-Prot (reviewed UniProt, 540K proteins) with provable error-rate guarantees.
+            and retrieve functionally similar proteins from Swiss-Prot (540K), AFDB (clustered AlphaFold DB), or a custom database with provable error-rate guarantees.
         </div>
         """)
 
@@ -1155,7 +1345,16 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                     with gr.Column(scale=1):
                         gr.Markdown("### Search Parameters")
 
-                        with gr.Group():
+                        # Top-level mode selector
+                        analysis_mode = gr.Radio(
+                            ["Protein Search (Protein-Vec)", "Enzyme Classification (CLEAN)"],
+                            label="Analysis Mode",
+                            value="Protein Search (Protein-Vec)",
+                            info="Protein Search: Find similar proteins | Enzyme Classification: Predict EC numbers"
+                        )
+
+                        # --- Protein Search parameters (visible by default) ---
+                        with gr.Group(visible=True) as protein_search_params:
                             risk_type = gr.Radio(
                                 ["FDR", "FNR", "Probability Filter"],
                                 label="Search Mode",
@@ -1196,10 +1395,29 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                                 info="Filter out results with 'Uncharacterized' in protein name"
                             )
 
-                        # Database options in accordion
-                        with gr.Accordion("Advanced Options", open=False):
+                        # --- Enzyme Classification parameters (hidden by default) ---
+                        with gr.Group(visible=False) as clean_params:
+                            CLEAN_ALPHAS = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
+
+                            clean_alpha = gr.Dropdown(
+                                choices=CLEAN_ALPHAS,
+                                value=1.0,
+                                label="Max Hierarchical Loss (α)",
+                                info="0.5=sub-subclass, 1.0=family, 2.0=subclass, 3.0=class level tolerance"
+                            )
+
+                            gr.Markdown("""
+                            **EC Hierarchy**: `class.subclass.sub-subclass.serial`
+                            - α=0.5: Near-exact EC match
+                            - α=1.0: Same sub-subclass (family level)
+                            - α=2.0: Same subclass
+                            - α=3.0: Same class
+                            """)
+
+                        # Database options in accordion (Protein Search only)
+                        with gr.Accordion("Advanced Options", open=False, visible=True) as advanced_options:
                             db_type = gr.Radio(
-                                ["Swiss-Prot (540K)", "SCOPE", "Custom"],
+                                ["Swiss-Prot (540K)", "SCOPE", "AFDB (Clustered)", "Custom"],
                                 label="Database",
                                 value="Swiss-Prot (540K)",
                                 info="Select lookup database"
@@ -1293,28 +1511,38 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                 gr.Markdown("""
                 ## Conformal Protein Retrieval
 
-                This tool searches for functionally similar proteins with **provable error-rate guarantees**
-                using conformal prediction. Given a query protein, it retrieves matches from Swiss-Prot (reviewed UniProt, 540K proteins) or a custom database
-                and controls either the false discovery rate or the false negative rate at a user-specified level α.
+                This tool provides two analysis modes with **provable statistical guarantees**
+                using conformal prediction:
 
-                ### Risk Control
+                ### Mode 1: Protein Search (Protein-Vec)
+
+                Search for functionally similar proteins from Swiss-Prot (540K), AFDB (clustered AlphaFold DB),
+                or a custom database with FDR/FNR control.
 
                 | Type | Controls | Use When |
                 |------|----------|----------|
                 | **FDR** (α) | False discoveries among retrieved matches | You need high precision — most results should be correct |
                 | **FNR** (α) | Missed true matches among all real matches | You need high recall — don't miss true homologs |
 
-                ### Pipeline
+                **Pipeline**: Protein-Vec (ProtTrans T5 + MoE) → 512-d → FAISS cosine → conformal threshold → Venn-Abers probabilities
 
-                1. **Embed** — Protein-Vec converts sequences to 512-d vectors (ProtTrans T5 + mixture-of-experts)
-                2. **Search** — FAISS retrieves k-nearest neighbors from the lookup database
-                3. **Threshold** — A calibrated similarity cutoff λ̂ guarantees E[Risk] ≤ α
-                4. **Calibrate** — Venn-Abers prediction assigns each match a calibrated probability
+                ### Mode 2: Enzyme Classification (CLEAN)
 
-                ### Key Result
+                Predict EC (Enzyme Commission) numbers for query proteins with hierarchical conformal guarantees.
 
-                Applied to JCVI Syn3.0 (a 473-gene minimal genome), this method confidently annotated
-                **59 of 149 (39.6%)** genes of unknown function at FDR α = 0.1.
+                | Alpha | Guarantee |
+                |-------|-----------|
+                | α=0.5 | Near-exact EC match |
+                | α=1.0 | Correct to sub-subclass (family) level |
+                | α=2.0 | Correct to subclass level |
+                | α=3.0 | Correct to class level |
+
+                **Pipeline**: ESM-1b → CLEAN LayerNormNet → 128-d → FAISS L2 → hierarchical conformal threshold
+
+                ### Key Results
+
+                - **Syn3.0**: Annotated **59/149 (39.6%)** genes of unknown function at FDR α = 0.1
+                - **CLEAN**: Hierarchical loss controlled at family level (α=1.0) across 392 test enzymes
 
                 ### Citation
 
@@ -1461,44 +1689,82 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
             )
             return fig
 
-        # Main prediction submission
-        def on_submit(fasta, upload, risk_t, risk_v, max_k, use_pv, custom_emb,
-                      lookup, metadata, custom_lookup, custom_meta, m_type,
-                      min_prob, hide_unc):
-            summary_json, df = process_input(
-                "", fasta, upload, "fasta_format", risk_t, risk_v, max_k,
-                use_pv, custom_emb, lookup, metadata, custom_lookup, custom_meta,
-                m_type, min_prob,
-            )
-            # Apply hide-uncharacterized filter
-            if hide_unc and not df.empty and "Protein Name(s)" in df.columns:
-                df = df[~df["Protein Name(s)"].str.contains("Uncharacterized", case=False, na=False)]
-            # Build per-query dropdown choices
-            if not df.empty and "Query" in df.columns:
-                unique_queries = df["Query"].unique().tolist()
-                choices = ["All queries"] + unique_queries
-            else:
-                unique_queries = []
-                choices = ["All queries"]
-            # Build probability vs. rank plot for the first query
-            plot_label = unique_queries[0] if unique_queries else None
-            fig = _build_prob_plot(query_label=plot_label)
+        # Mode switching handler
+        def update_analysis_mode(mode_choice):
+            is_protein_search = mode_choice == "Protein Search (Protein-Vec)"
             return (
-                summary_json,
-                df,
-                gr.Dropdown(choices=choices, value=unique_queries[0] if unique_queries else "All queries"),
-                gr.Code(visible=False, value=""),
-                gr.Plot(value=fig, visible=fig is not None),
+                gr.Group(visible=is_protein_search),   # protein_search_params
+                gr.Group(visible=not is_protein_search), # clean_params
+                gr.Accordion(visible=is_protein_search), # advanced_options
             )
+
+        analysis_mode.change(
+            fn=update_analysis_mode,
+            inputs=[analysis_mode],
+            outputs=[protein_search_params, clean_params, advanced_options],
+        )
+
+        # Main prediction submission (dispatches between Protein Search and CLEAN)
+        def on_submit(mode, fasta, upload, risk_t, risk_v, max_k, use_pv, custom_emb,
+                      lookup, metadata, custom_lookup, custom_meta, m_type,
+                      min_prob, hide_unc, c_alpha):
+            if mode == "Enzyme Classification (CLEAN)":
+                # CLEAN enzyme classification pipeline
+                summary_json, df = process_clean_input(
+                    fasta, upload, float(c_alpha),
+                )
+                # Build per-query dropdown
+                if not df.empty and "Query" in df.columns:
+                    unique_queries = df["Query"].unique().tolist()
+                    choices = ["All queries"] + unique_queries
+                else:
+                    unique_queries = []
+                    choices = ["All queries"]
+                return (
+                    summary_json,
+                    df,
+                    gr.Dropdown(choices=choices, value=unique_queries[0] if unique_queries else "All queries"),
+                    gr.Code(visible=False, value=""),
+                    gr.Plot(visible=False),  # No prob plot for CLEAN
+                )
+            else:
+                # Protein Search pipeline
+                summary_json, df = process_input(
+                    "", fasta, upload, "fasta_format", risk_t, risk_v, max_k,
+                    use_pv, custom_emb, lookup, metadata, custom_lookup, custom_meta,
+                    m_type, min_prob,
+                )
+                # Apply hide-uncharacterized filter
+                if hide_unc and not df.empty and "Protein Name(s)" in df.columns:
+                    df = df[~df["Protein Name(s)"].str.contains("Uncharacterized", case=False, na=False)]
+                # Build per-query dropdown choices
+                if not df.empty and "Query" in df.columns:
+                    unique_queries = df["Query"].unique().tolist()
+                    choices = ["All queries"] + unique_queries
+                else:
+                    unique_queries = []
+                    choices = ["All queries"]
+                # Build probability vs. rank plot for the first query
+                plot_label = unique_queries[0] if unique_queries else None
+                fig = _build_prob_plot(query_label=plot_label)
+                return (
+                    summary_json,
+                    df,
+                    gr.Dropdown(choices=choices, value=unique_queries[0] if unique_queries else "All queries"),
+                    gr.Code(visible=False, value=""),
+                    gr.Plot(value=fig, visible=fig is not None),
+                )
 
         submit_btn.click(
             fn=on_submit,
             inputs=[
+                analysis_mode,
                 fasta_text, upload_file,
                 risk_type, risk_value, max_results_slider,
                 use_protein_vec, custom_embeddings_state,
                 lookup_db_state, metadata_db_state, custom_lookup_upload, custom_metadata_upload,
                 match_type, min_probability, hide_uncharacterized,
+                clean_alpha,
             ],
             outputs=[results_summary, results_table, query_filter, sequence_detail, prob_plot]
         )
@@ -1729,6 +1995,13 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 return (
                     DEFAULT_SCOPE_EMBEDDING,
                     DEFAULT_SCOPE_METADATA,
+                    gr.File(value=None, visible=False),
+                    gr.File(value=None, visible=False),
+                )
+            if db_choice == "AFDB (Clustered)":
+                return (
+                    DEFAULT_AFDB_EMBEDDING,
+                    DEFAULT_AFDB_METADATA,
                     gr.File(value=None, visible=False),
                     gr.File(value=None, visible=False),
                 )

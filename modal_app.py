@@ -47,6 +47,21 @@ gpu_image = (
     )
 )
 
+# Image for CLEAN embedder (ESM-1b + LayerNormNet)
+clean_gpu_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .pip_install(
+        "torch>=2.0.0",
+        "fair-esm",
+        "numpy>=1.24.0",
+        "huggingface_hub>=0.20.0",
+    )
+    .add_local_file(
+        "CLEAN_repo/app/data/pretrained/split100.pth",
+        remote_path="/app/bundled/split100.pth",
+    )
+)
+
 web_image = (
     modal.Image.debian_slim(python_version="3.11")
     .env({"PYTHONPATH": "/app"})
@@ -75,6 +90,7 @@ web_image = (
     .add_local_file("results/fdr_thresholds_partial.csv", remote_path="/app/results/fdr_thresholds_partial.csv")
     .add_local_file("results/fnr_thresholds_partial.csv", remote_path="/app/results/fnr_thresholds_partial.csv")
     .add_local_file("data/gene_unknown/unknown_aa_seqs.fasta", remote_path="/app/bundled/syn30.fasta")
+    .add_local_file("results/clean_thresholds.csv", remote_path="/app/results/clean_thresholds.csv")
 )
 
 # ---------------------------------------------------------------------------
@@ -150,6 +166,10 @@ def _ensure_lookup_data():
         "data/lookup/scope_lookup_embeddings.npy",
         "data/lookup/scope_lookup.fasta",
         "data/gene_unknown/unknown_aa_seqs.fasta",
+        "data/afdb/afdb_embeddings_protein_vec.npy",
+        "data/afdb/afdb_metadata.tsv",
+        "data/clean/ec_centroid_embeddings.npy",
+        "data/clean/ec_centroid_metadata.tsv",
     ]
     for repo_path in data_files:
         try:
@@ -237,6 +257,83 @@ class Embedder:
 
 
 # ---------------------------------------------------------------------------
+# CLEAN Enzyme Embedding (ESM-1b + LayerNormNet, runs on A10G)
+# ---------------------------------------------------------------------------
+
+CLEAN_MODEL_PATH = "/app/bundled/split100.pth"
+
+
+@app.cls(
+    image=clean_gpu_image,
+    gpu="A10G",
+    timeout=600,
+    volumes={VOLUME_PATH: volume},
+)
+class CLEANEmbedder:
+    """GPU-accelerated enzyme embedding using ESM-1b + CLEAN LayerNormNet."""
+
+    @modal.enter()
+    def load_models(self):
+        import torch
+        import torch.nn as nn
+        import esm
+
+        self.device = torch.device("cuda:0")
+
+        # Load ESM-1b
+        self.esm_model, self.esm_alphabet = esm.pretrained.esm1b_t33_650M_UR50S()
+        self.esm_model = self.esm_model.to(self.device).eval()
+        self.esm_batch_converter = self.esm_alphabet.get_batch_converter()
+
+        # Build CLEAN LayerNormNet (1280 -> 512 -> 512 -> 128)
+        class LayerNormNet(nn.Module):
+            def __init__(self, hidden_dim, out_dim, device, dtype, drop_out=0.1):
+                super().__init__()
+                self.fc1 = nn.Linear(1280, hidden_dim, dtype=dtype, device=device)
+                self.ln1 = nn.LayerNorm(hidden_dim, dtype=dtype, device=device)
+                self.fc2 = nn.Linear(hidden_dim, hidden_dim, dtype=dtype, device=device)
+                self.ln2 = nn.LayerNorm(hidden_dim, dtype=dtype, device=device)
+                self.fc3 = nn.Linear(hidden_dim, out_dim, dtype=dtype, device=device)
+                self.dropout = nn.Dropout(p=drop_out)
+
+            def forward(self, x):
+                x = self.dropout(self.ln1(self.fc1(x)))
+                x = torch.relu(x)
+                x = self.dropout(self.ln2(self.fc2(x)))
+                x = torch.relu(x)
+                x = self.fc3(x)
+                return x
+
+        self.clean_model = LayerNormNet(512, 128, self.device, torch.float32)
+        checkpoint = torch.load(CLEAN_MODEL_PATH, map_location=self.device)
+        self.clean_model.load_state_dict(checkpoint)
+        self.clean_model.eval()
+
+    @modal.method()
+    def embed(self, sequences: list) -> list:
+        """Embed protein sequences using ESM-1b + CLEAN. Returns list of lists."""
+        import torch
+        import numpy as np
+
+        # Prepare ESM-1b input
+        data = [(f"seq_{i}", seq) for i, seq in enumerate(sequences)]
+        _, _, batch_tokens = self.esm_batch_converter(data)
+        batch_tokens = batch_tokens.to(self.device)
+
+        with torch.no_grad():
+            results = self.esm_model(batch_tokens, repr_layers=[33])
+            # Mean representation over sequence length (layer 33)
+            token_reps = results["representations"][33]
+            # Average over sequence positions (exclude BOS/EOS tokens)
+            esm_embeddings = token_reps[:, 1:-1, :].mean(dim=1)  # (N, 1280)
+
+            # Pass through CLEAN LayerNormNet
+            clean_embeddings = self.clean_model(esm_embeddings)  # (N, 128)
+
+        return clean_embeddings.cpu().numpy().tolist()
+
+
+# ---------------------------------------------------------------------------
 # Gradio UI (runs on CPU, single container)
 # ---------------------------------------------------------------------------
 
@@ -285,6 +382,18 @@ def ui():
         return np.array(result, dtype=np.float32)
 
     gi.run_embed_protein_vec = gpu_embed
+
+    def gpu_embed_clean(sequences, progress=None):
+        """Call Modal GPU function for CLEAN enzyme embedding."""
+        if progress:
+            progress(0.1, desc="Sending sequences to GPU (ESM-1b + CLEAN)...")
+        embedder = CLEANEmbedder()
+        result = embedder.embed.remote(sequences)
+        if progress:
+            progress(0.9, desc="CLEAN embeddings received from GPU!")
+        return np.array(result, dtype=np.float32)
+
+    gi.run_embed_clean = gpu_embed_clean
 
     # Create and serve the Gradio interface
     from protein_conformal.backend.gradio_interface import create_interface
