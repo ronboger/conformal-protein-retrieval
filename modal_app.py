@@ -99,83 +99,41 @@ web_image = (
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+def _check_volume_data():
+    """Verify required data files exist on the Modal volume.
 
-def _download_hf_file(repo_path: str, local_dir: str):
-    """Download a single file from the HF dataset repo."""
+    All data is pre-uploaded via `modal volume put cpr-data`.
+    This function only checks — it does not download anything.
+    """
     import os
-    from huggingface_hub import hf_hub_download
 
-    target = os.path.join(local_dir, repo_path)
-    if os.path.exists(target):
-        return target
-
-    os.makedirs(os.path.dirname(target), exist_ok=True)
-    hf_hub_download(
-        repo_id=HF_DATASET_ID,
-        repo_type="dataset",
-        filename=repo_path,
-        local_dir=local_dir,
-        local_dir_use_symlinks=False,
-    )
-    return target
-
-
-def _ensure_protein_vec_models():
-    """Download and extract protein_vec_models from HF dataset into the volume."""
-    import os
-    import tarfile
-    import shutil
-
-    if os.path.isdir(PVM_DIR) and os.path.exists(os.path.join(PVM_DIR, "protein_vec.ckpt")):
-        return
-
-    from huggingface_hub import hf_hub_download
-
-    dl_cache = f"{VOLUME_PATH}/.dl_cache"
-    os.makedirs(dl_cache, exist_ok=True)
-
-    arc_path = hf_hub_download(
-        repo_id=HF_DATASET_ID,
-        repo_type="dataset",
-        filename="protein_vec_models.tar.gz",
-        local_dir=dl_cache,
-        local_dir_use_symlinks=False,
-    )
-
-    os.makedirs(PVM_DIR, exist_ok=True)
-    with tarfile.open(arc_path, "r:gz") as tar:
-        for member in tar.getmembers():
-            member_path = os.path.join(PVM_DIR, member.name)
-            if not os.path.abspath(member_path).startswith(os.path.abspath(PVM_DIR)):
-                raise Exception(f"Unsafe tar path: {member.name}")
-        tar.extractall(path=PVM_DIR)
-
-    # Flatten single top-level directory if present
-    contents = os.listdir(PVM_DIR)
-    if len(contents) == 1:
-        nested = os.path.join(PVM_DIR, contents[0])
-        if os.path.isdir(nested):
-            for entry in os.listdir(nested):
-                shutil.move(os.path.join(nested, entry), os.path.join(PVM_DIR, entry))
-            shutil.rmtree(nested, ignore_errors=True)
-
-
-def _ensure_lookup_data():
-    """Download large lookup data files into the volume."""
-    data_files = [
+    required = [
+        "protein_vec_models/protein_vec.ckpt",
         "data/lookup_embeddings.npy",
         "data/lookup_embeddings_meta_data.tsv",
         "data/lookup/scope_lookup_embeddings.npy",
         "data/lookup/scope_lookup.fasta",
+    ]
+    optional = [
         "data/gene_unknown/unknown_aa_seqs.fasta",
         "data/afdb/afdb_embeddings_protein_vec.npy",
         "data/afdb/afdb_metadata.tsv",
     ]
-    for repo_path in data_files:
-        try:
-            _download_hf_file(repo_path, VOLUME_PATH)
-        except Exception as e:
-            print(f"Warning: could not download {repo_path}: {e}")
+
+    missing_required = []
+    for path in required:
+        full = os.path.join(VOLUME_PATH, path)
+        if not os.path.exists(full):
+            missing_required.append(path)
+
+    for path in optional:
+        full = os.path.join(VOLUME_PATH, path)
+        if not os.path.exists(full):
+            print(f"Optional data missing: {path}")
+
+    if missing_required:
+        print(f"WARNING: Required data missing from volume: {missing_required}")
+        print("Upload with: modal volume put cpr-data <local_path> <remote_path>")
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +158,9 @@ class Embedder:
         import numpy as np
         from transformers import T5EncoderModel, T5Tokenizer
 
-        _ensure_protein_vec_models()
+        # Protein-Vec models must be pre-uploaded to the volume
+        if not os.path.exists(os.path.join(PVM_DIR, "protein_vec.ckpt")):
+            raise RuntimeError(f"Protein-Vec models not found at {PVM_DIR}. Upload with: modal volume put cpr-data")
 
         self.device = torch.device("cuda:0")
 
@@ -360,9 +320,8 @@ def ui():
     # Work from /app where project source is baked into the image
     os.chdir("/app")
 
-    # Download large lookup data into the volume (cached across cold starts)
-    _ensure_lookup_data()
-    volume.commit()
+    # Verify data files exist on the volume (pre-uploaded via `modal volume put`)
+    _check_volume_data()
 
     # Symlink /app/data -> /vol/data so Gradio finds files at ./data/
     if not os.path.exists("/app/data"):
