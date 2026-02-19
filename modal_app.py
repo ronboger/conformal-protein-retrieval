@@ -118,6 +118,8 @@ def _check_volume_data():
         "data/gene_unknown/unknown_aa_seqs.fasta",
         "data/afdb/afdb_embeddings_protein_vec.npy",
         "data/afdb/afdb_metadata.tsv",
+        "data/euk/euk_embeddings_protein_vec.npy",
+        "data/euk/euk_metadata.tsv",
     ]
 
     missing_required = []

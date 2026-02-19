@@ -117,6 +117,21 @@
 
 ## Development Log
 
+### 2026-02-19 - Euk Database
+
+**Completed:**
+- Added "Euk (74K)" database from Nomburg et al. ("Birth of novel protein folds in the virome")
+- Parsed `euk.fasta` (74,129 sequences) into `data/euk/euk_metadata.tsv` with Entry, Protein names, Organism, Sequence columns
+- Moved embeddings to `data/euk/euk_embeddings_protein_vec.npy` (shape 74129x512)
+- Added Euk as radio option in Gradio UI (4 touch points in `gradio_interface.py`)
+- Added euk files to `_check_volume_data()` optional list in `modal_app.py`
+- Uploaded both files to Modal volume `cpr-data`
+- Deployed to production — Euk option visible at production URL
+
+**Branch:** `gradio`
+
+---
+
 ### 2026-02-18 - Deploy Fix + AFDB + CLEAN
 
 **Completed:**

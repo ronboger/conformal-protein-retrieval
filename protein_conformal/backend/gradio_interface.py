@@ -181,6 +181,9 @@ DEFAULT_SCOPE_METADATA = "./data/lookup/scope_lookup.fasta" # default path to th
 DEFAULT_AFDB_EMBEDDING = "./data/afdb/afdb_embeddings_protein_vec.npy" # default path to the AFDB lookup embeddings
 DEFAULT_AFDB_METADATA = "./data/afdb/afdb_metadata.tsv" # default path to the AFDB lookup metadata
 
+DEFAULT_EUK_EMBEDDING = "./data/euk/euk_embeddings_protein_vec.npy" # default path to the Euk lookup embeddings
+DEFAULT_EUK_METADATA = "./data/euk/euk_metadata.tsv" # default path to the Euk lookup metadata
+
 DEFAULT_CLEAN_CENTROID_EMBEDDING = "./data/clean/ec_centroid_embeddings.npy" # CLEAN EC centroid embeddings
 DEFAULT_CLEAN_CENTROID_METADATA = "./data/clean/ec_centroid_metadata.tsv" # CLEAN EC centroid metadata
 DEFAULT_CLEAN_THRESHOLDS = "./results/clean_thresholds.csv" # CLEAN hierarchical thresholds
@@ -899,6 +902,8 @@ def _process_input_impl(stage_timer: StageTimer,
             database_type = "SCOPE"
         elif lookup_db == DEFAULT_AFDB_EMBEDDING:
             database_type = "AFDB (Clustered)"
+        elif lookup_db == DEFAULT_EUK_EMBEDDING:
+            database_type = "Euk (74K)"
 
         is_partial = match_type.lower() == "partial"
         match_type_label = "partial" if is_partial else "exact"
@@ -1417,7 +1422,7 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                         # Database options in accordion (Protein Search only)
                         with gr.Accordion("Advanced Options", open=False, visible=True) as advanced_options:
                             db_type = gr.Radio(
-                                ["Swiss-Prot (540K)", "SCOPE", "AFDB (Clustered)", "Custom"],
+                                ["Swiss-Prot (540K)", "SCOPE", "AFDB (Clustered)", "Euk (74K)", "Custom"],
                                 label="Database",
                                 value="Swiss-Prot (540K)",
                                 info="Select lookup database"
@@ -2002,6 +2007,13 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 return (
                     DEFAULT_AFDB_EMBEDDING,
                     DEFAULT_AFDB_METADATA,
+                    gr.File(value=None, visible=False),
+                    gr.File(value=None, visible=False),
+                )
+            if db_choice == "Euk (74K)":
+                return (
+                    DEFAULT_EUK_EMBEDDING,
+                    DEFAULT_EUK_METADATA,
                     gr.File(value=None, visible=False),
                     gr.File(value=None, visible=False),
                 )
