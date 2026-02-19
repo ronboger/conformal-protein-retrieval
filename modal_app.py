@@ -277,6 +277,10 @@ class CLEANEmbedder:
         import torch
         import numpy as np
 
+        # ESM-1b supports max 1022 tokens; truncate longer sequences
+        MAX_ESM_LEN = 1022
+        sequences = [seq[:MAX_ESM_LEN] for seq in sequences]
+
         # Prepare ESM-1b input
         data = [(f"seq_{i}", seq) for i, seq in enumerate(sequences)]
         _, _, batch_tokens = self.esm_batch_converter(data)
@@ -326,8 +330,10 @@ def ui():
     _check_volume_data()
 
     # Symlink /app/data -> /vol/data so Gradio finds files at ./data/
-    if not os.path.exists("/app/data"):
+    try:
         os.symlink(f"{VOLUME_PATH}/data", "/app/data")
+    except FileExistsError:
+        pass
 
     # Copy bundled CLEAN centroid files into the data dir
     # (baked to /app/bundled/clean/ to avoid blocking the /app/data symlink)
@@ -346,7 +352,6 @@ def ui():
 
     def gpu_embed(sequences, progress=None):
         """Call Modal GPU function for protein embedding."""
-        import concurrent.futures
         if progress:
             progress(0.1, desc="Sending sequences to GPU...")
         embedder = Embedder()
@@ -354,7 +359,6 @@ def ui():
         try:
             result = future.get(timeout=GPU_TIMEOUT)
         except TimeoutError:
-            future.cancel()
             raise TimeoutError(f"Protein-Vec embedding timed out after {GPU_TIMEOUT}s. Try fewer/shorter sequences.")
         if progress:
             progress(0.9, desc="Embeddings received from GPU!")
@@ -371,7 +375,6 @@ def ui():
         try:
             result = future.get(timeout=GPU_TIMEOUT)
         except TimeoutError:
-            future.cancel()
             raise TimeoutError(f"CLEAN embedding timed out after {GPU_TIMEOUT}s. Try fewer/shorter sequences.")
         if progress:
             progress(0.9, desc="CLEAN embeddings received from GPU!")
