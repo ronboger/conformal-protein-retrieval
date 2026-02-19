@@ -133,8 +133,15 @@
 
 **CLEAN lookup database:** 5,242 EC centroids (ESM-1b + LayerNormNet 128-d embeddings), searched via FAISS L2 distance. Thresholds pre-computed from 20 calibration trials per α level. Empirical test losses match targets (α=1.0 → loss=0.93, α=2.0 → loss=1.98, α=3.0 → loss=2.95).
 
+**CLEAN bugs found and fixed:**
+1. `threshold_mean` column was renamed to `lambda_threshold` by the CSV alias map (designed for FDR/FNR CSVs). Fixed CLEAN lookup to use `lambda_threshold`.
+2. FAISS `IndexFlatL2` returns **squared** L2 distances, but calibration thresholds use regular L2. Added `D = np.sqrt(D)` after FAISS search. Verified: adenylate kinase → EC 2.7.4.3, L2 dist=5.98, threshold=7.18 at α=1.0.
+
+**Verified on dev (`modal serve`) before deploying:**
+- CLEAN: adenylate kinase → 1 match (EC 2.7.4.3, correct)
+- Protein Search: hemoglobin alpha → 909 matches (top hit P69905 HBA_HUMAN, correct)
+
 **Open issues:**
-- **CLEAN embedding fails on live app** — `CLEANEmbedder.embed.remote()` works when called directly from CLI (tested: 1 seq → 128-d, correct values). Failure is in the Gradio→GPU pathway. Likely cause: cold-start timeout on A10G (ESM-1b is 650M params, first load is slow) or Gradio progress callback incompatibility with Modal spawn. Next step: check Modal logs (`modal app logs cpr-gradio`) during a CLEAN submission to see the actual error.
 - **`CURRENT_SESSION` global dict** — Module-level mutable state shared across all users. Causes data races (user A's results overwritten by user B). Proper fix: refactor to `gr.State()` (per-session). This is a ~20-touch-point refactor across `gradio_interface.py`. Concurrency limit increase mitigates the blocking symptom but not the data race.
 
 **Branch:** `gradio`

@@ -521,7 +521,8 @@ def process_clean_input(
             n_proteins_list = resources["n_proteins"]
             k = min(50, resources["num_centroids"])
 
-            D, I = index.search(embeddings, k)  # D = L2 distances, I = indices
+            D, I = index.search(embeddings, k)  # D = squared L2 distances, I = indices
+            D = np.sqrt(D)  # Convert to regular L2 to match calibration thresholds
 
         # Step 4: Look up hierarchical threshold
         progress(0.7, desc="Applying hierarchical conformal threshold...")
@@ -530,10 +531,10 @@ def process_clean_input(
             try:
                 thresh_df = load_results_dataframe(
                     DEFAULT_CLEAN_THRESHOLDS,
-                    required_columns=["alpha", "threshold_mean"],
+                    required_columns=["alpha", "lambda_threshold"],
                 )
                 closest_idx = (thresh_df["alpha"] - alpha_value).abs().idxmin()
-                threshold = float(thresh_df.iloc[closest_idx]["threshold_mean"])
+                threshold = float(thresh_df.iloc[closest_idx]["lambda_threshold"])
                 actual_alpha = float(thresh_df.iloc[closest_idx]["alpha"])
                 test_loss = float(thresh_df.iloc[closest_idx].get("test_loss_mean", alpha_value))
             except (FileNotFoundError, KeyError) as e:
