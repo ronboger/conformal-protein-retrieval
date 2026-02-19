@@ -342,12 +342,20 @@ def ui():
     # Monkey-patch the embedding function to use the GPU Embedder
     import protein_conformal.backend.gradio_interface as gi
 
+    GPU_TIMEOUT = 300  # seconds — fail loudly rather than hang forever
+
     def gpu_embed(sequences, progress=None):
         """Call Modal GPU function for protein embedding."""
+        import concurrent.futures
         if progress:
             progress(0.1, desc="Sending sequences to GPU...")
         embedder = Embedder()
-        result = embedder.embed.remote(sequences)
+        future = embedder.embed.spawn(sequences)
+        try:
+            result = future.get(timeout=GPU_TIMEOUT)
+        except TimeoutError:
+            future.cancel()
+            raise TimeoutError(f"Protein-Vec embedding timed out after {GPU_TIMEOUT}s. Try fewer/shorter sequences.")
         if progress:
             progress(0.9, desc="Embeddings received from GPU!")
         return np.array(result, dtype=np.float32)
@@ -359,7 +367,12 @@ def ui():
         if progress:
             progress(0.1, desc="Sending sequences to GPU (ESM-1b + CLEAN)...")
         embedder = CLEANEmbedder()
-        result = embedder.embed.remote(sequences)
+        future = embedder.embed.spawn(sequences)
+        try:
+            result = future.get(timeout=GPU_TIMEOUT)
+        except TimeoutError:
+            future.cancel()
+            raise TimeoutError(f"CLEAN embedding timed out after {GPU_TIMEOUT}s. Try fewer/shorter sequences.")
         if progress:
             progress(0.9, desc="CLEAN embeddings received from GPU!")
         return np.array(result, dtype=np.float32)
@@ -370,6 +383,6 @@ def ui():
     from protein_conformal.backend.gradio_interface import create_interface
 
     demo = create_interface()
-    demo.queue(max_size=5)
+    demo.queue(max_size=10, default_concurrency_limit=5)
 
     return mount_gradio_app(app=FastAPI(), blocks=demo, path="/")

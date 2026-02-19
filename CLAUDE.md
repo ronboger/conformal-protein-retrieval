@@ -117,7 +117,7 @@
 
 ## Development Log
 
-### 2026-02-19 - Euk Database
+### 2026-02-19 - Euk Database + Concurrency + CLEAN Fixes
 
 **Completed:**
 - Added "Euk (74K)" database from Nomburg et al. ("Birth of novel protein folds in the virome")
@@ -127,6 +127,15 @@
 - Added euk files to `_check_volume_data()` optional list in `modal_app.py`
 - Uploaded both files to Modal volume `cpr-data`
 - Deployed to production — Euk option visible at production URL
+- Fixed CLEAN UI text: removed vague "family" term, added precise loss levels (e.g., "loss ≤ 1" = same sub-subclass, 4th digit may differ)
+- Added GPU embedding timeouts (300s) using `.spawn()` + `.get(timeout=)` — hangs now fail loudly instead of blocking forever
+- Increased Gradio queue concurrency: `default_concurrency_limit=5` so multiple users aren't serialized
+
+**CLEAN lookup database:** 5,242 EC centroids (ESM-1b + LayerNormNet 128-d embeddings), searched via FAISS L2 distance. Thresholds pre-computed from 20 calibration trials per α level. Empirical test losses match targets (α=1.0 → loss=0.93, α=2.0 → loss=1.98, α=3.0 → loss=2.95).
+
+**Open issues:**
+- **CLEAN embedding fails on live app** — `CLEANEmbedder.embed.remote()` works when called directly from CLI (tested: 1 seq → 128-d, correct values). Failure is in the Gradio→GPU pathway. Likely cause: cold-start timeout on A10G (ESM-1b is 650M params, first load is slow) or Gradio progress callback incompatibility with Modal spawn. Next step: check Modal logs (`modal app logs cpr-gradio`) during a CLEAN submission to see the actual error.
+- **`CURRENT_SESSION` global dict** — Module-level mutable state shared across all users. Causes data races (user A's results overwritten by user B). Proper fix: refactor to `gr.State()` (per-session). This is a ~20-touch-point refactor across `gradio_interface.py`. Concurrency limit increase mitigates the blocking symptom but not the data race.
 
 **Branch:** `gradio`
 

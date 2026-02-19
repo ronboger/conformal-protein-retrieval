@@ -1408,15 +1408,15 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                                 choices=CLEAN_ALPHAS,
                                 value="1.0",
                                 label="Max Hierarchical Loss (α)",
-                                info="0.5=sub-subclass, 1.0=family, 2.0=subclass, 3.0=class level tolerance"
+                                info="0.5=near-exact EC, 1.0=same sub-subclass, 2.0=same subclass, 3.0=same class"
                             )
 
                             gr.Markdown("""
-                            **EC Hierarchy**: `class.subclass.sub-subclass.serial`
-                            - α=0.5: Near-exact EC match
-                            - α=1.0: Same sub-subclass (family level)
-                            - α=2.0: Same subclass
-                            - α=3.0: Same class
+                            **EC Hierarchy**: `class.subclass.sub-subclass.serial` (4 levels)
+                            - α=0.5: Near-exact EC match (loss ≈ 0.5)
+                            - α=1.0: Same sub-subclass — 4th digit may differ (loss ≤ 1)
+                            - α=2.0: Same subclass — 3rd digit may differ (loss ≤ 2)
+                            - α=3.0: Same class — 2nd digit may differ (loss ≤ 3)
                             """)
 
                         # Database options in accordion (Protein Search only)
@@ -1535,12 +1535,12 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
 
                 Predict EC (Enzyme Commission) numbers for query proteins with hierarchical conformal guarantees.
 
-                | Alpha | Guarantee |
-                |-------|-----------|
-                | α=0.5 | Near-exact EC match |
-                | α=1.0 | Correct to sub-subclass (family) level |
-                | α=2.0 | Correct to subclass level |
-                | α=3.0 | Correct to class level |
+                | Alpha | Max Hierarchical Loss | Guarantee |
+                |-------|----------------------|-----------|
+                | α=0.5 | ≤ 0.5 | Near-exact EC match |
+                | α=1.0 | ≤ 1 | Same sub-subclass (4th digit may differ) |
+                | α=2.0 | ≤ 2 | Same subclass (3rd digit may differ) |
+                | α=3.0 | ≤ 3 | Same class (2nd digit may differ) |
 
                 **Pipeline**: ESM-1b → CLEAN LayerNormNet → 128-d → FAISS L2 → hierarchical conformal threshold
 
