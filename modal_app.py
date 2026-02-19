@@ -91,8 +91,8 @@ web_image = (
     .add_local_file("results/fnr_thresholds_partial.csv", remote_path="/app/results/fnr_thresholds_partial.csv")
     .add_local_file("data/gene_unknown/unknown_aa_seqs.fasta", remote_path="/app/bundled/syn30.fasta")
     .add_local_file("results/clean_thresholds.csv", remote_path="/app/results/clean_thresholds.csv")
-    .add_local_file("data/clean/ec_centroid_embeddings.npy", remote_path="/app/data/clean/ec_centroid_embeddings.npy")
-    .add_local_file("data/clean/ec_centroid_metadata.tsv", remote_path="/app/data/clean/ec_centroid_metadata.tsv")
+    .add_local_file("data/clean/ec_centroid_embeddings.npy", remote_path="/app/bundled/clean/ec_centroid_embeddings.npy")
+    .add_local_file("data/clean/ec_centroid_metadata.tsv", remote_path="/app/bundled/clean/ec_centroid_metadata.tsv")
 )
 
 # ---------------------------------------------------------------------------
@@ -326,6 +326,16 @@ def ui():
     # Symlink /app/data -> /vol/data so Gradio finds files at ./data/
     if not os.path.exists("/app/data"):
         os.symlink(f"{VOLUME_PATH}/data", "/app/data")
+
+    # Copy bundled CLEAN centroid files into the data dir
+    # (baked to /app/bundled/clean/ to avoid blocking the /app/data symlink)
+    import shutil
+    os.makedirs("/app/data/clean", exist_ok=True)
+    for fname in ["ec_centroid_embeddings.npy", "ec_centroid_metadata.tsv"]:
+        src = f"/app/bundled/clean/{fname}"
+        dst = f"/app/data/clean/{fname}"
+        if os.path.exists(src) and not os.path.exists(dst):
+            shutil.copy2(src, dst)
 
     # Monkey-patch the embedding function to use the GPU Embedder
     import protein_conformal.backend.gradio_interface as gi

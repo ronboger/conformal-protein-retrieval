@@ -130,6 +130,16 @@ pytest tests/ --cov=protein_conformal --cov-report=html
 
 ## Changelog
 
+### 2026-02-18
+- Fixed deployed Modal app: baked CLEAN centroid files to `/app/bundled/clean/` instead of `/app/data/clean/` (was blocking `/app/data -> /vol/data` symlink)
+- Fixed Gradio 6 dropdown validation: converted float choices to strings (Gradio 6.5.1 does strict type comparison)
+- Migrated from HuggingFace downloads to Modal volume for all data storage
+- Added AFDB (AlphaFold DB) clustered database option
+- Added CLEAN enzyme classification mode (ESM-1b + LayerNormNet on A10G GPU)
+- Added AFDB metadata conversion script
+- All 56 tests passing
+- Deployed to `https://doudna-lab--cpr-gradio-ui.modal.run`
+
 ### 2026-02-03
 - Archived 16 redundant scripts to `scripts/archive/`
 - Consolidated threshold CSVs, added full tables to GETTING_STARTED.md

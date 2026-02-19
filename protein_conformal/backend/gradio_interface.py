@@ -1362,12 +1362,12 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                                 info="FDR/FNR: Conformal guarantees | Probability Filter: Direct threshold on match probability"
                             )
 
-                            FDR_ALPHAS = [0.005, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2]
-                            FNR_ALPHAS = [0.005, 0.01, 0.02, 0.05, 0.1, 0.15, 0.2]
+                            FDR_ALPHAS = ["0.005", "0.01", "0.02", "0.05", "0.1", "0.15", "0.2"]
+                            FNR_ALPHAS = ["0.005", "0.01", "0.02", "0.05", "0.1", "0.15", "0.2"]
 
                             risk_value = gr.Dropdown(
                                 choices=FDR_ALPHAS,
-                                value=0.1,
+                                value="0.1",
                                 label="Risk Level (α)",
                                 info="Lower = stricter threshold, fewer but more confident results"
                             )
@@ -1397,11 +1397,11 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
 
                         # --- Enzyme Classification parameters (hidden by default) ---
                         with gr.Group(visible=False) as clean_params:
-                            CLEAN_ALPHAS = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
+                            CLEAN_ALPHAS = ["0.5", "1.0", "1.5", "2.0", "2.5", "3.0"]
 
                             clean_alpha = gr.Dropdown(
                                 choices=CLEAN_ALPHAS,
-                                value=1.0,
+                                value="1.0",
                                 label="Max Hierarchical Loss (α)",
                                 info="0.5=sub-subclass, 1.0=family, 2.0=subclass, 3.0=class level tolerance"
                             )
@@ -2023,17 +2023,17 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
         def update_risk_controls(risk_choice):
             if risk_choice == "Probability Filter":
                 return (
-                    gr.Dropdown(choices=FDR_ALPHAS, value=0.1, visible=False),
+                    gr.Dropdown(choices=FDR_ALPHAS, value="0.1", visible=False),
                     gr.Slider(visible=True),
                 )
             elif risk_choice == "FNR":
                 return (
-                    gr.Dropdown(choices=FNR_ALPHAS, value=0.1, visible=True),
+                    gr.Dropdown(choices=FNR_ALPHAS, value="0.1", visible=True),
                     gr.Slider(visible=False),
                 )
             else:  # FDR
                 return (
-                    gr.Dropdown(choices=FDR_ALPHAS, value=0.1, visible=True),
+                    gr.Dropdown(choices=FDR_ALPHAS, value="0.1", visible=True),
                     gr.Slider(visible=False),
                 )
 

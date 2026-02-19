@@ -117,6 +117,24 @@
 
 ## Development Log
 
+### 2026-02-18 - Deploy Fix + AFDB + CLEAN
+
+**Completed:**
+- Fixed baked file path conflict: CLEAN centroid files moved from `/app/data/clean/` to `/app/bundled/clean/` (was creating real dir that blocked volume symlink)
+- Fixed Gradio 6 dropdown validation: converted float choices to strings (Gradio 6.5.1 strict type comparison)
+- Deployed AFDB + CLEAN modes to production
+- All 56 tests passing
+- Production URL: `https://doudna-lab--cpr-gradio-ui.modal.run`
+
+**Architecture (3 Modal containers):**
+- `Embedder` — ProtTrans T5 + Protein-Vec on T4 GPU
+- `CLEANEmbedder` — ESM-1b + LayerNormNet on A10G GPU
+- `ui` — Gradio on CPU, calls `.remote()` to GPU containers
+
+**Branch:** `gradio`
+
+---
+
 ### 2026-02-11 - Gradio UI/UX Overhaul (Phase A + B)
 
 **Completed:**
@@ -211,17 +229,20 @@ scancel JOBID                       # Cancel a job
 - Use FAISS for similarity search
 - Notebooks for analysis, package for algorithms
 
-### Gradio 5 Gotchas
+### Gradio 6 Gotchas
 - **`wrap=False` does NOT clip text** — it only sets `white-space: nowrap`. Columns still expand to fit content. You MUST also constrain column width for clipping to work.
-- **External CSS often doesn't work** — Gradio 5 uses scoped Svelte styles that override external CSS even with `!important`. Use `gr.Blocks(js=...)` with inline styles via JavaScript instead.
+- **External CSS often doesn't work** — Gradio uses scoped Svelte styles that override external CSS even with `!important`. Use `gr.Blocks(js=...)` with inline styles via JavaScript instead.
 - **`interactive=True` on Dataframe** — clicking a cell enters edit mode, showing full content. This IS the click-to-expand behavior if the initial display is clipped.
-- **Modal symlink gotcha** — Don't bake files into `/app/data/` (it creates a real directory that blocks the `/app/data -> /vol/data` symlink). Use `/app/bundled/` instead.
+- **Dropdown choices must be strings** — Gradio 6 does strict type comparison in dropdown preprocess. Use `["0.1", "0.2"]` not `[0.1, 0.2]`, and `float()` in the handler.
 - **Test on compute nodes** — `pytest tests/` takes ~5 min, prefer SLURM `standard` partition.
-- **Gradio version** — Modal installs `gradio>=5.0.0`. Check specific version behavior before assuming CSS/JS patterns work.
+- **Gradio version** — Modal currently installs Gradio 6.5.1. Check specific version behavior before assuming CSS/JS patterns work.
 
 ### Modal Deployment
 - `modal deploy modal_app.py` — takes ~2s, deploys Gradio + GPU embedder
+- `modal serve modal_app.py` — local testing with live logs (use for debugging)
 - Container idle timeout: 20 min (`scaledown_window=60*20`)
-- First request after cold start: downloads ~1GB lookup embeddings from HuggingFace → builds FAISS index → slow. Subsequent requests within same container are fast (in-memory cache).
-- Baked files: `results/*.csv`, `protein_conformal/`, `data/gene_unknown/unknown_aa_seqs.fasta` (at `/app/bundled/syn30.fasta`)
-- Volume (`/vol`): lookup embeddings, metadata TSV, Protein-Vec models, HF cache
+- First request after cold start: loads ~1GB lookup embeddings from volume → builds FAISS index → slow. Subsequent requests within same container are fast (in-memory cache).
+- Baked files: `results/*.csv`, `protein_conformal/`, `data/gene_unknown/unknown_aa_seqs.fasta` (at `/app/bundled/syn30.fasta`), `data/clean/ec_centroid_*` (at `/app/bundled/clean/`)
+- **NEVER bake files to `/app/data/`** — it creates a real directory that blocks the `/app/data -> /vol/data` symlink. Always bake to `/app/bundled/` and copy at startup.
+- Volume (`/vol`): lookup embeddings, metadata TSV, Protein-Vec models, HF cache, AFDB data
+- **CLEAN_repo dependency** — `CLEAN_repo/app/data/pretrained/split100.pth` must exist at deploy time (baked into CLEANEmbedder image)
