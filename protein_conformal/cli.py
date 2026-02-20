@@ -92,17 +92,37 @@ def _embed_protein_vec(sequences, device, args):
     masks = [all_cols[k] in sampled_keys for k in range(len(all_cols))]
     masks = torch.logical_not(torch.tensor(masks, dtype=torch.bool))[None, :]
 
-    # Embed sequences
-    print("Embedding sequences...")
+    # Embed sequences with checkpointing
+    output_path = Path(args.output)
+    checkpoint_path = output_path.with_suffix('.partial.npy')
+    start_idx = 0
     embeddings = []
-    for i, seq in enumerate(sequences):
+
+    # Resume from checkpoint if available
+    if checkpoint_path.exists():
+        partial = np.load(str(checkpoint_path))
+        start_idx = len(partial)
+        embeddings = [partial[i:i+1] for i in range(len(partial))]
+        print(f"Resuming from checkpoint: {start_idx}/{len(sequences)} already embedded")
+
+    print(f"Embedding sequences {start_idx}..{len(sequences)}...")
+    for i in range(start_idx, len(sequences)):
+        seq = sequences[i]
         protrans_seq = featurize_prottrans([seq], model, tokenizer, device)
         emb = embed_vec(protrans_seq, model_deep, masks, device)
         embeddings.append(emb)
         if (i + 1) % 10 == 0 or i == len(sequences) - 1:
             print(f"  Processed {i + 1}/{len(sequences)}")
+        # Checkpoint every 10000 sequences
+        if (i + 1) % 10000 == 0:
+            np.save(str(checkpoint_path), np.concatenate(embeddings))
+            print(f"  Checkpoint saved: {i + 1}/{len(sequences)}")
 
-    return np.concatenate(embeddings)
+    result = np.concatenate(embeddings)
+    # Clean up checkpoint
+    if checkpoint_path.exists():
+        checkpoint_path.unlink()
+    return result
 
 
 def _embed_clean(sequences, device, args):

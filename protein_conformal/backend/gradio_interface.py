@@ -196,7 +196,8 @@ CUSTOM_UPLOAD_METADATA = "./data/custom_uploaded_metadata.tsv" # path to the cus
 VALID_AA = set('ACDEFGHIKLMNPQRSTVWY')
 SPECIAL_CHARS = set('XUB')  # X=unknown, U=selenocysteine, B=ambiguous D/N
 
-# Global session storage for the current Gradio instance
+# CURRENT_SESSION is DEPRECATED — kept only for local (non-Modal) fallback.
+# On Modal, per-user session data flows through gr.State() instead.
 CURRENT_SESSION = {}
 
 
@@ -602,7 +603,7 @@ def process_clean_input(
             else:
                 display_df = pd.DataFrame()
 
-            # Store in session for export
+            # Store in global session for export (will be captured by on_submit handler)
             global CURRENT_SESSION
             CURRENT_SESSION = {
                 "results": {"summary": summary, "matches": results, "threshold": threshold},
@@ -1027,6 +1028,9 @@ def _process_input_impl(stage_timer: StageTimer,
                         m["p1_partial"] = float(np.interp(sim, _sim_cal, _p1_partial_cal))
             except Exception as e:
                 logger.warning(f"Raw match calibration failed: {e}")
+                # Flag calibration failure so UI can warn user
+                for m in raw_matches:
+                    m["_calibration_failed"] = True
             # Update cache
             CURRENT_SESSION["_cache"] = {
                 "input_hash": input_hash,
@@ -1093,6 +1097,10 @@ def _process_input_impl(stage_timer: StageTimer,
             # Threshold >= 1.0 warning
             if not is_prob_filter and conformal_results["threshold"] >= 1.0:
                 summary["warning"] = "Threshold >= 1.0: no results can pass at this alpha level. Try a less strict (higher) alpha."
+
+            # Calibration failure warning
+            if all_matches and all_matches[0].get("_calibration_failed"):
+                summary["calibration_warning"] = "Probability calibration unavailable. Probability columns show 0.000 and should be ignored."
 
             # Remove None values
             summary = {k: v for k, v in summary.items() if v is not None}
@@ -1161,7 +1169,7 @@ def _process_input_impl(stage_timer: StageTimer,
         error_message = {"error": f"Error during search: {str(e)}"}
         return error_message, pd.DataFrame()
 
-def export_current_results(format_type: str) -> Tuple[str, Optional[str]]:
+def export_current_results(format_type: str, session: dict) -> Tuple[str, Optional[str]]:
     """
     Export the current results in the specified format.
     All matches (not just displayed ones) will be included in the export.
@@ -1172,9 +1180,7 @@ def export_current_results(format_type: str) -> Tuple[str, Optional[str]]:
     Returns:
         Tuple of (status JSON string, file path for download)
     """
-    global CURRENT_SESSION
-
-    if not CURRENT_SESSION or "results" not in CURRENT_SESSION:
+    if not session or "results" not in session:
         return json.dumps({"error": "No results to export"}, indent=2), None
 
     try:
@@ -1184,8 +1190,8 @@ def export_current_results(format_type: str) -> Tuple[str, Optional[str]]:
         # Create a unique filename
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        risk_type = (CURRENT_SESSION.get("parameters", {}).get("risk_type") or "risk").lower()
-        threshold = CURRENT_SESSION.get("results", {}).get("threshold")
+        risk_type = (session.get("parameters", {}).get("risk_type") or "risk").lower()
+        threshold = session.get("results", {}).get("threshold")
         threshold_tag = "thr_unknown"
         if isinstance(threshold, (int, float)):
             threshold_tag = f"thr_{threshold:.4f}".replace(".", "p")
@@ -1196,9 +1202,9 @@ def export_current_results(format_type: str) -> Tuple[str, Optional[str]]:
 
         # Export the results
         if format_type == "csv":
-            if "matches" in CURRENT_SESSION["results"]:
+            if "matches" in session["results"]:
                 # Export ALL matches, not just the displayed ones
-                df = pd.DataFrame(CURRENT_SESSION["results"]["matches"])
+                df = pd.DataFrame(session["results"]["matches"])
                 df.to_csv(file_path, index=False)
                 total_exported = len(df)
             else:
@@ -1206,8 +1212,8 @@ def export_current_results(format_type: str) -> Tuple[str, Optional[str]]:
         elif format_type == "json":
             with open(file_path, 'w') as f:
                 # For JSON export, we include the full result structure
-                json.dump(CURRENT_SESSION["results"], f, indent=2, default=str)
-                total_exported = len(CURRENT_SESSION["results"].get("matches", []))
+                json.dump(session["results"], f, indent=2, default=str)
+                total_exported = len(session["results"].get("matches", []))
         else:
             return json.dumps({"error": f"Unsupported format: {format_type}"}, indent=2), None
 
@@ -1222,10 +1228,9 @@ def export_current_results(format_type: str) -> Tuple[str, Optional[str]]:
             "error": f"Error exporting results: {str(e)}"
         }, indent=2), None
 
-def export_embeddings() -> Tuple[str, Optional[str]]:
+def export_embeddings(session: dict) -> Tuple[str, Optional[str]]:
     """Export cached query embeddings as a .npy file for reuse with the CLI."""
-    global CURRENT_SESSION
-    cache = (CURRENT_SESSION or {}).get("_cache", {})
+    cache = (session or {}).get("_cache", {})
     embeddings = cache.get("embeddings")
     query_meta = cache.get("query_meta")
     if embeddings is None:
@@ -1294,6 +1299,9 @@ def create_interface():
     """
 
     with gr.Blocks(title="Conformal Protein Retrieval", css=custom_css, theme=gr.themes.Soft()) as interface:
+        # Per-user session state (replaces global CURRENT_SESSION for concurrent safety)
+        session_state = gr.State({})
+
         # Header
         gr.HTML("""
         <div style="text-align: center; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; margin-bottom: 20px;">
@@ -1619,22 +1627,21 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
         # Export functionality
         export_btn.click(
             fn=export_current_results,
-            inputs=[export_format],
+            inputs=[export_format, session_state],
             outputs=[export_status, export_download]
         )
 
         save_emb_btn.click(
             fn=export_embeddings,
-            inputs=[],
+            inputs=[session_state],
             outputs=[export_status, export_download]
         )
 
         # --- Probability vs. rank plot helper ---
-        def _build_prob_plot(query_label=None):
+        def _build_prob_plot(session, query_label=None):
             """Build a line plot of exact/partial match probability vs ordered hit rank (1..k)
             using all raw matches from the cache (before threshold filtering)."""
-            global CURRENT_SESSION
-            raw = (CURRENT_SESSION or {}).get("_cache", {}).get("raw_matches", [])
+            raw = (session or {}).get("_cache", {}).get("raw_matches", [])
             if not raw:
                 return None
             import plotly.graph_objects as go
@@ -1713,12 +1720,14 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
         # Main prediction submission (dispatches between Protein Search and CLEAN)
         def on_submit(mode, fasta, upload, risk_t, risk_v, max_k, use_pv, custom_emb,
                       lookup, metadata, custom_lookup, custom_meta, m_type,
-                      min_prob, hide_unc, c_alpha):
+                      min_prob, hide_unc, c_alpha, session):
             if mode == "Enzyme Classification (CLEAN)":
                 # CLEAN enzyme classification pipeline
                 summary_json, df = process_clean_input(
                     fasta, upload, float(c_alpha),
                 )
+                # Snapshot CURRENT_SESSION into per-user state
+                session = dict(CURRENT_SESSION)
                 # Build per-query dropdown
                 if not df.empty and "Query" in df.columns:
                     unique_queries = df["Query"].unique().tolist()
@@ -1732,6 +1741,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                     gr.Dropdown(choices=choices, value=unique_queries[0] if unique_queries else "All queries"),
                     gr.Code(visible=False, value=""),
                     gr.Plot(visible=False),  # No prob plot for CLEAN
+                    session,
                 )
             else:
                 # Protein Search pipeline
@@ -1740,6 +1750,8 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                     use_pv, custom_emb, lookup, metadata, custom_lookup, custom_meta,
                     m_type, min_prob,
                 )
+                # Snapshot CURRENT_SESSION into per-user state
+                session = dict(CURRENT_SESSION)
                 # Apply hide-uncharacterized filter
                 if hide_unc and not df.empty and "Protein Name(s)" in df.columns:
                     df = df[~df["Protein Name(s)"].str.contains("Uncharacterized", case=False, na=False)]
@@ -1752,13 +1764,14 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                     choices = ["All queries"]
                 # Build probability vs. rank plot for the first query
                 plot_label = unique_queries[0] if unique_queries else None
-                fig = _build_prob_plot(query_label=plot_label)
+                fig = _build_prob_plot(session, query_label=plot_label)
                 return (
                     summary_json,
                     df,
                     gr.Dropdown(choices=choices, value=unique_queries[0] if unique_queries else "All queries"),
                     gr.Code(visible=False, value=""),
                     gr.Plot(value=fig, visible=fig is not None),
+                    session,
                 )
 
         submit_btn.click(
@@ -1771,16 +1784,16 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 lookup_db_state, metadata_db_state, custom_lookup_upload, custom_metadata_upload,
                 match_type, min_probability, hide_uncharacterized,
                 clean_alpha,
+                session_state,
             ],
-            outputs=[results_summary, results_table, query_filter, sequence_detail, prob_plot]
+            outputs=[results_summary, results_table, query_filter, sequence_detail, prob_plot, session_state]
         )
 
         # Per-query filtering
-        def filter_by_query(query_choice):
-            global CURRENT_SESSION
-            if not CURRENT_SESSION or "results" not in CURRENT_SESSION:
+        def filter_by_query(query_choice, session):
+            if not session or "results" not in session:
                 return pd.DataFrame(), gr.Code(visible=False, value=""), gr.Plot(visible=False)
-            matches = CURRENT_SESSION["results"].get("matches", [])
+            matches = session["results"].get("matches", [])
             if not matches:
                 return pd.DataFrame(), gr.Code(visible=False, value=""), gr.Plot(visible=False)
 
@@ -1818,7 +1831,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
 
             # Build probability plot for the filtered query
             plot_label = query_choice if query_choice and query_choice != "All queries" else None
-            fig = _build_prob_plot(query_label=plot_label)
+            fig = _build_prob_plot(session, query_label=plot_label)
             return (
                 display_df,
                 gr.Code(visible=False, value=""),
@@ -1827,7 +1840,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
 
         query_filter.change(
             fn=filter_by_query,
-            inputs=[query_filter],
+            inputs=[query_filter, session_state],
             outputs=[results_table, sequence_detail, prob_plot],
         )
 
@@ -1924,7 +1937,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
             return candidates[0] if candidates else None
 
         # Row selection → show full sequences from session
-        def on_row_select(df, evt: gr.SelectData):
+        def on_row_select(df, session, evt: gr.SelectData):
             if df is None or df.empty:
                 return gr.Code(visible=False, value="")
 
@@ -1932,8 +1945,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
 
             display_row = row_dict_from_event(df, evt, row_idx)
 
-            global CURRENT_SESSION
-            matches = (CURRENT_SESSION or {}).get("results", {}).get("matches", [])
+            matches = (session or {}).get("results", {}).get("matches", [])
 
             m = find_full_match(display_row, matches)
             if m is None and 0 <= row_idx < len(matches):
@@ -1984,7 +1996,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
 
         results_table.select(
             fn=on_row_select,
-            inputs=[results_table],
+            inputs=[results_table, session_state],
             outputs=[sequence_detail],
         )
 
