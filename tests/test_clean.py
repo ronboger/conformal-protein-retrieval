@@ -138,7 +138,7 @@ class TestProcessCleanInput:
         import protein_conformal.backend.gradio_interface as gi
 
         mock_progress = MagicMock()
-        summary_str, df = gi.process_clean_input("", None, 1.0, progress=mock_progress)
+        summary_str, df, _ = gi.process_clean_input("", None, 1.0, progress=mock_progress)
         parsed = json.loads(summary_str)
 
         assert "error" in parsed
@@ -150,7 +150,7 @@ class TestProcessCleanInput:
         import protein_conformal.backend.gradio_interface as gi
 
         mock_progress = MagicMock()
-        summary_str, df = gi.process_clean_input("   \n  \t  ", None, 1.0, progress=mock_progress)
+        summary_str, df, _ = gi.process_clean_input("   \n  \t  ", None, 1.0, progress=mock_progress)
         parsed = json.loads(summary_str)
 
         assert "error" in parsed
@@ -162,9 +162,11 @@ class TestProcessCleanInput:
 
         self._reset_cache()
 
-        dim = clean_centroid_dir["dim"]
-        np.random.seed(42)
-        fake_embeddings = np.random.randn(2, dim).astype(np.float32)
+        # Use the first two centroids as query embeddings (L2 distance ~0) so the
+        # search lands on real EC matches that pass the conformal threshold. Random
+        # embeddings sit ~16 away and are filtered out (empty df) after the
+        # squared-L2/threshold fix.
+        fake_embeddings = clean_centroid_dir["embeddings"][:2].copy().astype(np.float32)
 
         mock_progress = MagicMock()
 
@@ -181,7 +183,7 @@ class TestProcessCleanInput:
             # Clear LRU cache so our temp thresholds file is used
             gi._cached_results_dataframe.cache_clear()
 
-            summary_str, df = gi.process_clean_input(
+            summary_str, df, _ = gi.process_clean_input(
                 SIMPLE_FASTA, None, 1.0, progress=mock_progress
             )
 

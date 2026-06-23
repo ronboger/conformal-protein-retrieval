@@ -196,9 +196,10 @@ CUSTOM_UPLOAD_METADATA = "./data/custom_uploaded_metadata.tsv" # path to the cus
 VALID_AA = set('ACDEFGHIKLMNPQRSTVWY')
 SPECIAL_CHARS = set('XUB')  # X=unknown, U=selenocysteine, B=ambiguous D/N
 
-# CURRENT_SESSION is DEPRECATED — kept only for local (non-Modal) fallback.
-# On Modal, per-user session data flows through gr.State() instead.
-CURRENT_SESSION = {}
+# Per-user session data flows through gr.State() and is threaded through the
+# search entry points (process_input / process_clean_input) as a `session` dict.
+# There is intentionally no module-global session — that would race across
+# concurrent users on Modal.
 
 
 class StageTimer:
@@ -486,9 +487,15 @@ def process_clean_input(
     fasta_text: str,
     upload_file: Optional[Any],
     alpha_value: float,
+    session: Optional[dict] = None,
     progress=gr.Progress(),
-) -> Tuple[str, pd.DataFrame]:
-    """Process input for CLEAN enzyme classification mode."""
+) -> Tuple[str, pd.DataFrame, dict]:
+    """Process input for CLEAN enzyme classification mode.
+
+    Returns ``(summary_json, display_df, session)`` where ``session`` is the
+    per-user state dict (carries results for export); it is threaded back into
+    ``gr.State`` by ``on_submit`` rather than stored in a module global.
+    """
     import json
 
     stage_timer = StageTimer()
@@ -503,10 +510,10 @@ def process_clean_input(
             elif fasta_text and fasta_text.strip():
                 sequences, query_meta = parse_fasta(fasta_text)
             else:
-                return json.dumps({"error": "No FASTA input provided."}, indent=2), pd.DataFrame()
+                return json.dumps({"error": "No FASTA input provided."}, indent=2), pd.DataFrame(), (session or {})
 
         if not sequences:
-            return json.dumps({"error": "No sequences found in FASTA input."}, indent=2), pd.DataFrame()
+            return json.dumps({"error": "No sequences found in FASTA input."}, indent=2), pd.DataFrame(), (session or {})
 
         # Step 2: Embed with CLEAN (ESM-1b + LayerNormNet)
         progress(0.1, desc="Embedding with ESM-1b + CLEAN...")
@@ -603,18 +610,17 @@ def process_clean_input(
             else:
                 display_df = pd.DataFrame()
 
-            # Store in global session for export (will be captured by on_submit handler)
-            global CURRENT_SESSION
-            CURRENT_SESSION = {
+            # Per-user session for export (returned to on_submit -> gr.State)
+            new_session = {
                 "results": {"summary": summary, "matches": results, "threshold": threshold},
                 "parameters": {"mode": "clean", "alpha": alpha_value},
             }
 
         progress(1.0, desc="Enzyme classification complete!")
-        return json.dumps(summary, indent=2, default=str), display_df
+        return json.dumps(summary, indent=2, default=str), display_df, new_session
 
     except Exception as e:
-        return json.dumps({"error": f"Error during CLEAN search: {str(e)}"}, indent=2), pd.DataFrame()
+        return json.dumps({"error": f"Error during CLEAN search: {str(e)}"}, indent=2), pd.DataFrame(), (session or {})
     finally:
         stage_timer.log_summary()
 
@@ -754,11 +760,17 @@ def process_input(input_text: str,
                   custom_metadata_upload: Optional[Any] = None,
                   match_type: str = "Exact",
                   min_probability: float = 0.5,
-                  progress=gr.Progress()) -> Tuple[str, pd.DataFrame]:
-    """Wrapper that instruments the main pipeline with timing information."""
+                  session: Optional[dict] = None,
+                  progress=gr.Progress()) -> Tuple[str, pd.DataFrame, dict]:
+    """Wrapper that instruments the main pipeline with timing information.
+
+    ``session`` carries this user's prior state (used for embedding/FAISS cache
+    reuse); the updated session is returned and stored in ``gr.State`` by
+    ``on_submit``.
+    """
     stage_timer = StageTimer()
     try:
-        summary, df = _process_input_impl(
+        summary, df, session_out = _process_input_impl(
             stage_timer,
             input_text,
             fasta_text,
@@ -775,9 +787,10 @@ def process_input(input_text: str,
             custom_metadata_upload,
             match_type,
             min_probability,
+            session,
             progress,
         )
-        return json.dumps(summary, indent=2, default=str), df
+        return json.dumps(summary, indent=2, default=str), df, session_out
     finally:
         stage_timer.log_summary()
 
@@ -798,7 +811,8 @@ def _process_input_impl(stage_timer: StageTimer,
                         custom_metadata_upload: Optional[Any] = None,
                         match_type: str = "Exact",
                         min_probability: float = 0.5,
-                        progress=gr.Progress()) -> Tuple[Dict[str, Any], pd.DataFrame]:
+                        session: Optional[dict] = None,
+                        progress=gr.Progress()) -> Tuple[Dict[str, Any], pd.DataFrame, dict]:
     """
     Process the input and generate predictions.
     
@@ -837,10 +851,10 @@ def _process_input_impl(stage_timer: StageTimer,
         elif fasta_text and fasta_text.strip():
             sequences, query_meta = parse_fasta(fasta_text)
         else:
-            return {"error": "No FASTA input provided. Please enter FASTA content or upload a FASTA file."}, pd.DataFrame()
+            return {"error": "No FASTA input provided. Please enter FASTA content or upload a FASTA file."}, pd.DataFrame(), (session or {})
 
     if not sequences and custom_embeddings is None:
-        return {"error": "No sequences found in the FASTA input. Please check your input format."}, pd.DataFrame()
+        return {"error": "No sequences found in the FASTA input. Please check your input format."}, pd.DataFrame(), (session or {})
 
     # Ensure conformal_results is initialized
     conformal_results = {}
@@ -850,18 +864,18 @@ def _process_input_impl(stage_timer: StageTimer,
         try:
             lookup_db = _persist_uploaded_file(custom_lookup_upload, CUSTOM_UPLOAD_EMBEDDING)
         except Exception as e:
-            return {"error": f"Error processing custom database: {str(e)}"}, pd.DataFrame()
+            return {"error": f"Error processing custom database: {str(e)}"}, pd.DataFrame(), (session or {})
 
     if custom_metadata_upload is not None:
         try:
             metadata_db = _persist_uploaded_file(custom_metadata_upload, CUSTOM_UPLOAD_METADATA, preserve_suffix=True)
         except Exception as e:
-            return {"error": f"Error processing custom metadata: {str(e)}"}, pd.DataFrame()
+            return {"error": f"Error processing custom metadata: {str(e)}"}, pd.DataFrame(), (session or {})
 
     # ---- Caching: reuse embeddings and FAISS results across parameter changes ----
-    global CURRENT_SESSION
     input_hash = hashlib.md5("".join(sequences).encode()).hexdigest()
-    cached = CURRENT_SESSION.get("_cache", {})
+    cached = (session or {}).get("_cache", {})
+    new_cache = cached  # preserved unless a fresh search overwrites it below
     embeddings = None
 
     # Step 2: Get embeddings (skip if same input sequences are cached)
@@ -878,7 +892,7 @@ def _process_input_impl(stage_timer: StageTimer,
                 embeddings = run_embed_protein_vec(sequences, progress)
             progress(0.6, desc="Embeddings complete!")
         except Exception as e:
-            return {"error": f"Error generating embeddings: {str(e)}"}, pd.DataFrame()
+            return {"error": f"Error generating embeddings: {str(e)}"}, pd.DataFrame(), (session or {})
     elif custom_embeddings:
         try:
             progress(0.2, desc="Loading custom embeddings...")
@@ -890,9 +904,9 @@ def _process_input_impl(stage_timer: StageTimer,
                 os.unlink(tmp_path)
             progress(0.4, desc="Custom embeddings loaded!")
         except Exception as e:
-            return {"error": f"Error loading embeddings: {str(e)}"}, pd.DataFrame()
+            return {"error": f"Error loading embeddings: {str(e)}"}, pd.DataFrame(), (session or {})
     else:
-        return {"error": "Either Protein-Vec must be enabled or custom embeddings must be provided"}, pd.DataFrame()
+        return {"error": "Either Protein-Vec must be enabled or custom embeddings must be provided"}, pd.DataFrame(), (session or {})
     
     # Step 3: Perform conformal prediction (or probability filter)
     try:
@@ -1032,7 +1046,7 @@ def _process_input_impl(stage_timer: StageTimer,
                 for m in raw_matches:
                     m["_calibration_failed"] = True
             # Update cache
-            CURRENT_SESSION["_cache"] = {
+            new_cache = {
                 "input_hash": input_hash,
                 "embeddings": embeddings,
                 "sequences": sequences,
@@ -1115,9 +1129,8 @@ def _process_input_impl(stage_timer: StageTimer,
                 "empirical_risk": conformal_results["empirical_risk"]
             }
 
-            # Preserve _cache across updates
-            existing_cache = CURRENT_SESSION.get("_cache", {})
-            CURRENT_SESSION = {
+            # Build this user's session (cache preserved across parameter changes)
+            new_session = {
                 "results": complete_results,
                 "parameters": {
                     "risk_type": risk_type,
@@ -1125,7 +1138,7 @@ def _process_input_impl(stage_timer: StageTimer,
                     "max_results": max_results,
                     "database_type": database_type,
                 },
-                "_cache": existing_cache,
+                "_cache": new_cache,
             }
 
         progress(1.0, desc="Search complete!")
@@ -1164,10 +1177,10 @@ def _process_input_impl(stage_timer: StageTimer,
         else:
             display_df = pd.DataFrame()
 
-        return summary, display_df
+        return summary, display_df, new_session
     except Exception as e:
         error_message = {"error": f"Error during search: {str(e)}"}
-        return error_message, pd.DataFrame()
+        return error_message, pd.DataFrame(), (session or {})
 
 def export_current_results(format_type: str, session: dict) -> Tuple[str, Optional[str]]:
     """
@@ -1299,7 +1312,8 @@ def create_interface():
     """
 
     with gr.Blocks(title="Conformal Protein Retrieval", css=custom_css, theme=gr.themes.Soft()) as interface:
-        # Per-user session state (replaces global CURRENT_SESSION for concurrent safety)
+        # Per-user session state — threaded through process_input/process_clean_input
+        # so concurrent users never share results (no module-global session).
         session_state = gr.State({})
 
         # Header
@@ -1723,11 +1737,9 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                       min_prob, hide_unc, c_alpha, session):
             if mode == "Enzyme Classification (CLEAN)":
                 # CLEAN enzyme classification pipeline
-                summary_json, df = process_clean_input(
-                    fasta, upload, float(c_alpha),
+                summary_json, df, session = process_clean_input(
+                    fasta, upload, float(c_alpha), session=session,
                 )
-                # Snapshot CURRENT_SESSION into per-user state
-                session = dict(CURRENT_SESSION)
                 # Build per-query dropdown
                 if not df.empty and "Query" in df.columns:
                     unique_queries = df["Query"].unique().tolist()
@@ -1745,13 +1757,11 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 )
             else:
                 # Protein Search pipeline
-                summary_json, df = process_input(
+                summary_json, df, session = process_input(
                     "", fasta, upload, "fasta_format", risk_t, risk_v, max_k,
                     use_pv, custom_emb, lookup, metadata, custom_lookup, custom_meta,
-                    m_type, min_prob,
+                    m_type, min_prob, session=session,
                 )
-                # Snapshot CURRENT_SESSION into per-user state
-                session = dict(CURRENT_SESSION)
                 # Apply hide-uncharacterized filter
                 if hide_unc and not df.empty and "Protein Name(s)" in df.columns:
                     df = df[~df["Protein Name(s)"].str.contains("Uncharacterized", case=False, na=False)]
