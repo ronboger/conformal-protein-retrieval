@@ -46,6 +46,29 @@ except Exception:
 # Query, UniProt Entry, Protein Name(s), Match Sequence, Pfam, Match Description, Exact Prob, Partial Prob
 RESULTS_TABLE_COLUMN_WIDTHS = [280, 120, 220, 210, 180, 220, 135, 135]
 
+# Hard char limits for long display columns (keyed by display header). Truncating
+# the data itself guarantees a cell can't blow up the row height when clicked —
+# Gradio's max_chars/CSS only affect rendering, not the underlying value, so a
+# selected cell would otherwise unfurl the full sequence. Full content stays in
+# the detail panel (click a row).
+# NOTE: do NOT truncate "Query" — the per-query dropdown matches the full
+# query_meta against this column, so a truncated value would break filtering.
+RESULTS_DISPLAY_TRUNCATE = {
+    "Match Sequence": 30,
+    "Match Description": 45,
+    "Protein Name(s)": 45,
+}
+
+
+def _truncate_display_columns(display_df, limits=RESULTS_DISPLAY_TRUNCATE):
+    """Truncate long string columns in-place (by display header) to `limit` chars + '…'."""
+    for col, lim in limits.items():
+        if col in display_df.columns:
+            display_df[col] = display_df[col].apply(
+                lambda v, _l=lim: (str(v)[:_l] + "…") if isinstance(v, str) and len(v) > _l else v
+            )
+    return display_df
+
 
 def _download_from_dataset(path: str) -> str:
     """Download a file from the dataset repo to the given local path."""
@@ -1174,6 +1197,7 @@ def _process_input_impl(stage_timer: StageTimer,
                                     and col not in HIDDEN_COLS])
             display_df = results_df.reindex(columns=display_columns).copy()
             display_df = display_df.rename(columns=display_header_map)
+            _truncate_display_columns(display_df)
         else:
             display_df = pd.DataFrame()
 
@@ -1838,6 +1862,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                                     and col not in HIDDEN_COLS])
             display_df = df.reindex(columns=display_columns).copy()
             display_df = display_df.rename(columns=display_header_map)
+            _truncate_display_columns(display_df)
 
             # Build probability plot for the filtered query
             plot_label = query_choice if query_choice and query_choice != "All queries" else None

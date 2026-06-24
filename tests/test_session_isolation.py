@@ -253,3 +253,57 @@ class TestProteinSearchSessionThreading:
         assert matches_a and matches_b, "expected non-empty matches in both sessions"
         assert all("queryA_MARK" in m["query_meta"] for m in matches_a)
         assert all("queryB_MARK" in m["query_meta"] for m in matches_b)
+
+
+# ---------------------------------------------------------------------------
+# Display truncation (Match Sequence cell must not blow up the row height)
+# ---------------------------------------------------------------------------
+
+LONG_SEQ = "M" + "ACDEFGHIKL" * 40   # 401 residues — would unfurl a table row
+
+
+def _mock_run_search_long(embeddings, query_seqs, query_meta, lookup_db=None,
+                          metadata_db=None, threshold=0.0, k=1000, progress=None):
+    rows = []
+    for i, qm in enumerate(query_meta):
+        rows.append({
+            "query_seq": query_seqs[i], "query_meta": qm,
+            "lookup_seq": LONG_SEQ, "D_score": 0.9,
+            "lookup_entry": "E0", "lookup_pfam": "PF0",
+            "lookup_protein_names": "Uncharacterized protein " + ("x" * 80),
+        })
+    return pd.DataFrame(rows)
+
+
+def test_match_sequence_truncated_in_display():
+    """The displayed Match Sequence cell is truncated, but the session keeps the
+    full sequence (for the detail panel) and Query is left intact (for filtering)."""
+    import protein_conformal.backend.gradio_interface as gi
+
+    def embed(seqs, progress=None):
+        return np.ones((len(seqs), 512), dtype=np.float32)
+
+    fasta = ">queryZ_MARK protein\nMVLSPADKTNVKAAWGKVGA\n"
+    with patch.object(gi, "run_embed_protein_vec", side_effect=embed), \
+         patch.object(gi, "run_search", side_effect=_mock_run_search_long), \
+         patch.object(gi, "load_results_dataframe", side_effect=_mock_load_results_dataframe):
+        _, df, session = gi.process_input(
+            "", fasta, None, "fasta_format", "FDR", 0.1, 10,
+            True, None, gi.DEFAULT_LOOKUP_EMBEDDING, gi.DEFAULT_LOOKUP_METADATA,
+            None, None, "Exact", 0.5, session={}, progress=MagicMock(),
+        )
+
+    limit = gi.RESULTS_DISPLAY_TRUNCATE["Match Sequence"]
+    cells = df["Match Sequence"].tolist()
+    assert cells, "expected at least one row"
+    # Displayed cell is short and elided — cannot blow up the row.
+    assert all(len(c) <= limit + 1 for c in cells)
+    assert all(c.endswith("…") for c in cells)
+    assert all(LONG_SEQ not in c for c in cells)
+    # Full sequence preserved in the session (detail panel reads from here).
+    assert session["results"]["matches"][0]["lookup_seq"] == LONG_SEQ
+    # Query column left untruncated so the per-query dropdown still matches the
+    # full query_meta used by filter_by_query.
+    q_cell = df["Query"].tolist()[0]
+    assert "…" not in q_cell
+    assert q_cell == session["results"]["matches"][0]["query_meta"]
