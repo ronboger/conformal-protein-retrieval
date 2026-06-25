@@ -147,12 +147,15 @@ def _check_volume_data():
     gpu="A10G",  # ~4x faster than T4 for the per-sequence T5 forwards (Syn3.0 = 149);
                  # scales to zero, so ~cost-neutral per search (faster offsets higher rate).
     timeout=600,
+    # Snapshotting the ~11 GB fp32 ProtTrans model needs headroom or creation
+    # OOM-kills (exit 137) and falls back to a slow full reload on every cold start.
+    memory=32768,
     volumes={VOLUME_PATH: volume},
     secrets=[dataset_config_secret],
     enable_memory_snapshot=True,
     # NOTE: experimental GPU memory snapshot (enable_gpu_snapshot) segfaults on
-    # restore (exit 139) on this config and Modal falls back to a full reload that
-    # is SLOWER than a normal cold start -- removed. CPU snapshot below works.
+    # restore (exit 139) on this config; removed. The CPU snapshot needs the
+    # memory above to create successfully.
 )
 class Embedder:
     """GPU-accelerated protein embedding using ProtTrans + Protein-Vec.
