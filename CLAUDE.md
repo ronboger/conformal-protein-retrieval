@@ -117,6 +117,116 @@
 
 ## Development Log
 
+### 2026-06-25 - GPU embed latency: memory snapshot + fp16 + volume prebuild
+
+Prior round (cold-start FAISS / UI payload / LRU) only helped a little because a
+*fresh* search is dominated by GPU embedding (ProtTrans T5-XL load + forward), which
+it didn't touch. User declined warm GPU (cost); pursued cost-free + validation-gated levers.
+
+**Done (all on PREVIEW app, prod untouched):**
+- **Modal memory snapshot on Embedder** (modal_app.py): `enable_memory_snapshot=True`;
+  split `@modal.enter` into snap=True (load ProtTrans+Protein-Vec to CPU, `map_location='cpu'`)
+  + snap=False (move to GPU). Cold restores skip the ~3B-param model load. Cost-free.
+- **fp16 autocast scoped to ProtTrans T5** in Embedder.embed (Protein-Vec head stays fp32:
+  its fp16 attention hits a cuDNN SDPA "no execution plan" error; `pt.float()` before embed_vec).
+  VALIDATED on GPU (scripts/verify_fp16.py, SLURM job 1141782): cosine fp32-vs-fp16 = 1.000000,
+  Syn3.0 = 59/149 for both fp32 and fp16 (matches paper), identical hit set, 100% identical Pfam.
+- **StageTimer surfaced**: `logging.basicConfig(INFO, force=True)` in `ui()` so per-stage
+  durations show in Modal logs.
+- **UI Stop toggle** (gradio_interface.py): Search button swaps to a red "⏹ Stop" in the
+  same spot only while running (visibility toggle via _searching/_idle), reverting on
+  completion. `stop_btn.click(_idle, cancels=[search_event])` cancels the in-flight search
+  (UI-level: frees the worker; the GPU spawn may still finish). No extra real estate.
+- **Input cap** (gradio_interface.py + util.query_count_error): MAX_QUERY_SEQUENCES=5000;
+  over the cap returns an error routing genome-scale jobs to the CLI (`cpr search`, checkpointed).
+  Bumped GPU_TIMEOUT 300->600s for headroom at the cap on A10G. 5000 ~ bacterial genome.
+- **GPU bench scripts**: scripts/modal_bench_gpu.py (T4 vs A10G, 149 Syn3.0) +
+  modal_bench_scaling.py (A10G at N=150/1000/5000). Embedding is linear in N, so genome-scale
+  time extrapolates from the per-seq rate. (`modal run`; ephemeral apps, output buffered.)
+- **CLI "fast mode"** (cli.py): `--fast` flag on `cpr embed` and `cpr search` -> fp16 via
+  `_should_use_fp16(fast, device)` (gated to CUDA) threaded into `_embed_protein_vec` with the
+  same validated autocast pattern. So the package (not just the web app) can run fp16.
+- **Measured (preview StageTimer):** warm search ~1s (protein_vec_embedding 0.38-0.91s +
+  faiss 0.10s); repeat query ~0s (LRU); first/cold query ~32s (all in the embedding stage =
+  GPU container spin-up + snapshot restore + CPU->GPU transfer; snapshot confirmed restoring).
+- **Syn3.0 (149 queries) slow = embedding, NOT batchable.** StageTimer: protein_vec_embedding
+  52s (incl. cold start; ~20s warm on T4), database_search 1.65s, rest ~0. Batching RULED OUT:
+  verify_batch.py (GPU job 1141906) shows batched embedding is bit-identical (cosine 1.0, 59/149)
+  but SLOWER (0.68x) -- padding short seqs to the batch max wastes more than it saves, and
+  embed_vec stays per-seq. featurize_prottrans (utils_search.py:52) already runs T5 on the batch
+  but keeps only features[0], so per-seq calls = N full T5 forwards. Real lever: GPU speed --
+  same 149 embeds took 5.3s on A5000 vs ~20s T4. **Switched Embedder T4 -> A10G** (~4x faster,
+  scales to zero so ~cost-neutral per search). scripts/verify_batch.py + slurm_verify_batch.sh.
+- **FAISS sidecars prebuilt on cpr-data volume** (scripts/modal_prebuild_faiss.py via `modal run`):
+  lookup 540K, AFDB 2.3M, Euk 74K, SCOPe. Cold-start index build now skipped.
+
+**Verify harness:** scripts/verify_fp16.py + slurm_verify_fp16.sh (partition=gpu; conda
+`conformal-s` has the full stack: torch cu124 + transformers + faiss + pytorch_lightning).
+ProtTrans cached at /groups/doudna/projects/ronb/huggingface_cache (set HF_HOME + HF_HUB_OFFLINE=1).
+
+**Deploy state:** PREVIEW app `cpr-gradio-preview` (https://doudna-lab--cpr-gradio-preview-ui.modal.run)
+via `modal deploy --name`. PROD (`cpr-gradio`) UNTOUCHED. Preview needs CLEAN binaries symlinked
+from main checkout (worktree gitignores them). Cleanup when done: `modal app stop cpr-gradio-preview`.
+
+**Cluster gotchas:** `*.modal.run` DNS is flaky from login nodes (input-plane invocation +
+web URL fail intermittently); the control plane (deploy/run/logs) works. So the app can't be
+driven from the cluster — user tests from their machine. Background monitors get killed between turns.
+
+### 2026-06-24 - Performance: prebuilt FAISS index + UI payload cap
+
+**Context:** Embedding + site felt slow. Got a Codex diagnosis, then implemented
+the zero-cost wins (user chose NO warm containers, so no `min_containers` changes —
+cold start is shrunk, not eliminated). Plan: `docs/plans/2026-06-24-perf-optimization.md`.
+
+**Completed (TDD, all in worktree `claude/sweet-gauss-646781`):**
+- **Prebuilt FAISS index (biggest cold-start win).** New `util.py` functions:
+  `build_index` (non-mutating normalized IndexFlatIP), `lookup_index_path` (sidecar
+  path: `*.npy` -> `*.faissindex`), `load_or_build_index` (read if present else
+  build+write), `load_lookup_index` (prefers sidecar; **skips the ~1 GB np.load**
+  when present). Exact search preserved — round-trip test proves read-back results
+  are bit-identical, so conformal guarantees unaffected.
+- **Offline builder** `scripts/prebuild_faiss.py` — idempotent, builds sidecars for
+  the 4 cosine DBs (Swiss-Prot/SCOPe/AFDB/Euk). NOT CLEAN (IndexFlatL2, separate path).
+- **Gradio `get_lookup_resources`** now uses `load_lookup_index` (dropped the
+  `embeddings.copy()`). Falls back to building from `.npy` if no sidecar (safe to
+  deploy before prebuilding).
+- **Display cap** `cap_matches_per_query` — table shows top 200/query; full match
+  set stays in `session["results"]["matches"]` so **download returns everything**.
+  Added a `display_note` in the summary. Constant: `DISPLAY_ROWS_PER_QUERY`.
+- **Cache-key fix** `sequences_hash` — replaced collision-prone `"".join(sequences)`
+  (`["AB","CD"]` == `["ABC","D"]`) with a `\x00`-separated hash.
+- **Process-level embedding LRU** `util.LRUCache` + `gi.EMBEDDING_CACHE` (cap 256,
+  keyed `protein_vec:<seqhash>`) — common queries skip the GPU round-trip across
+  sessions/users. test_session_isolation has an autouse fixture that clears it
+  (a leftover entry would skip the barrier-mock embed and deadlock the concurrency test).
+- **Singleflight index build** `gi.LOOKUP_BUILD_LOCKS` + `_get_lookup_build_lock` —
+  concurrent cold-start misses on the same DB now build once (per-key lock +
+  double-checked cache), instead of each loading ~1 GB and rebuilding.
+
+**Tests:** new — `tests/test_util.py` TestFAISSPrebuild (8), TestDisplayCap (4),
+TestSequencesHash (3), TestLRUCache (4); `tests/test_lookup_resources.py` (3, incl.
+reading prebuilt index with `.npy` deleted + threaded singleflight build-once);
+`tests/test_session_isolation.py` (+1 embedding-cache reuse).
+
+**DEPLOYMENT STEP REQUIRED for the speedup:** run `prebuild_faiss.py` against the
+Modal volume data and commit, so the `.faissindex` sidecars exist in prod. Without
+them the code still works (builds from `.npy`), just no cold-start win.
+
+**Deferred / needs decision (each blocked for a real reason, not skipped lazily):**
+- ANN index (HNSW/IVF) — gated on validating recall vs verified numbers
+  (verify_syn30/verify_dali + threshold tables). Recall risk to conformal guarantees.
+  Needs a compute-node run against the real DBs.
+- Group 1 Modal GPU: embedding batching + pickled-bytes return — real embedding
+  speedups but in `modal_app.py`; batching correctness depends on `utils_search`
+  padding behavior (not in repo, on the volume) and needs a `modal serve` + GPU run
+  to verify. Not safe to ship blind (wrong embeddings would silently corrupt search).
+- Skipped as low-value: Protein-Vec length guard (a warning, not a speedup;
+  truncating would risk reproducibility); plot-data caching (plotly rebuild is already
+  ms-range); self-host fonts (cosmetic, changes typography — a design choice).
+
+**Lessons:** `docs/plans/2026-06-24-worktree-import-lessons.md` (worktree scripts
+import the installed package not the worktree; `conda run python -` ignores heredoc stdin).
+
 ### 2026-02-19 - Euk Database + Concurrency + CLEAN Fixes
 
 **Completed:**

@@ -45,6 +45,21 @@ def test_main_no_command():
     assert 'embed' in result.stdout or 'embed' in result.stderr
 
 
+def test_should_use_fp16_gating():
+    """fp16 'fast mode' applies only on CUDA GPUs, and only when requested."""
+    from protein_conformal.cli import _should_use_fp16
+
+    assert _should_use_fp16(True, "cuda") is True
+    assert _should_use_fp16(True, "cpu") is False
+    assert _should_use_fp16(False, "cuda") is False
+    assert _should_use_fp16(False, "cpu") is False
+
+    # Accepts torch.device-like objects (duck-typed .type attribute).
+    class _Dev:
+        type = "cuda"
+    assert _should_use_fp16(True, _Dev()) is True
+
+
 def test_embed_help():
     """Test that 'cpr embed --help' works and shows expected options."""
     result = run_cli('embed', '--help')
@@ -55,6 +70,7 @@ def test_embed_help():
     assert 'protein-vec' in result.stdout
     assert 'clean' in result.stdout
     assert '--cpu' in result.stdout
+    assert '--fast' in result.stdout
 
 
 def test_search_help():
@@ -67,6 +83,7 @@ def test_search_help():
     assert '--k' in result.stdout
     assert '--threshold' in result.stdout
     assert '--database-meta' in result.stdout
+    assert '--fast' in result.stdout
 
 
 def test_verify_help():
