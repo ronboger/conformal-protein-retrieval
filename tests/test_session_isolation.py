@@ -29,6 +29,19 @@ _gr_mock.Progress = MagicMock(return_value=MagicMock())
 sys.modules.setdefault("gradio", _gr_mock)
 
 
+@pytest.fixture(autouse=True)
+def _reset_embedding_cache():
+    """Clear the process-level embedding cache around each test.
+
+    Several tests reuse the same query sequence with a barrier inside the embed
+    mock; a leftover cache entry would skip embed and deadlock the barrier.
+    """
+    import protein_conformal.backend.gradio_interface as gi
+    gi.EMBEDDING_CACHE.clear()
+    yield
+    gi.EMBEDDING_CACHE.clear()
+
+
 # ---------------------------------------------------------------------------
 # Fixtures (mirror tests/test_clean.py — kept local to avoid touching conftest)
 # ---------------------------------------------------------------------------
@@ -221,6 +234,43 @@ class TestProteinSearchSessionThreading:
         matches = session["results"]["matches"]
         assert matches
         assert all("queryA_MARK" in m["query_meta"] for m in matches)
+
+    def test_summary_reports_search_time(self):
+        """The result summary includes how long the search took."""
+        import protein_conformal.backend.gradio_interface as gi
+
+        def embed(seqs, progress=None):
+            return np.ones((len(seqs), 512), dtype=np.float32)
+
+        with patch.object(gi, "run_embed_protein_vec", side_effect=embed), \
+             patch.object(gi, "run_search", side_effect=_mock_run_search), \
+             patch.object(gi, "load_results_dataframe", side_effect=_mock_load_results_dataframe):
+            fasta = ">queryA_MARK protein\nMVLSPADKTNVKAAWGKVGA\n"
+            summary_str, _, _ = self._call(gi, fasta, {})
+
+        summary = json.loads(summary_str)
+        assert "search_time_seconds" in summary
+        assert isinstance(summary["search_time_seconds"], (int, float))
+        assert summary["search_time_seconds"] >= 0
+
+    def test_embedding_cache_skips_repeat_embed(self):
+        """A second fresh-session search of the same sequence reuses the embedding."""
+        import protein_conformal.backend.gradio_interface as gi
+
+        calls = {"n": 0}
+
+        def embed(seqs, progress=None):
+            calls["n"] += 1
+            return np.ones((len(seqs), 512), dtype=np.float32)
+
+        with patch.object(gi, "run_embed_protein_vec", side_effect=embed), \
+             patch.object(gi, "run_search", side_effect=_mock_run_search), \
+             patch.object(gi, "load_results_dataframe", side_effect=_mock_load_results_dataframe):
+            fasta = ">queryA_MARK protein\nMVLSPADKTNVKAAWGKVGA\n"
+            self._call(gi, fasta, {})   # fresh session -> embeds + caches
+            self._call(gi, fasta, {})   # fresh session, same seq -> cache hit
+
+        assert calls["n"] == 1
 
     def test_sessions_isolated_under_concurrency(self):
         import protein_conformal.backend.gradio_interface as gi

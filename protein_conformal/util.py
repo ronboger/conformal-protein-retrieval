@@ -527,6 +527,173 @@ def load_database(lookup_database):
     return index
 
 
+def build_index(embeddings):
+    """
+    Build a normalized IndexFlatIP without mutating the caller's array.
+
+    Same exact (brute-force inner-product) index as load_database, but copies the
+    input before the in-place faiss.normalize_L2 so callers don't have to.
+
+    embeddings: NxM matrix of embeddings
+    """
+    import faiss
+
+    emb = np.array(embeddings, dtype=np.float32)  # always a fresh, contiguous copy
+    faiss.normalize_L2(emb)
+    index = faiss.IndexFlatIP(emb.shape[1])
+    index.add(emb)
+    return index
+
+
+class LRUCache:
+    """
+    Minimal thread-safe LRU cache (string key -> value).
+
+    Used as a process-level embedding cache so common queries skip the GPU
+    round-trip across sessions/users. get() returns None on a miss (values stored
+    here are never None).
+    """
+
+    def __init__(self, capacity):
+        from collections import OrderedDict
+        import threading
+
+        self.capacity = capacity
+        self._store = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, key):
+        with self._lock:
+            if key not in self._store:
+                return None
+            self._store.move_to_end(key)
+            return self._store[key]
+
+    def put(self, key, value):
+        with self._lock:
+            self._store[key] = value
+            self._store.move_to_end(key)
+            while len(self._store) > self.capacity:
+                self._store.popitem(last=False)
+
+    def clear(self):
+        with self._lock:
+            self._store.clear()
+
+
+def query_count_error(n, cap):
+    """
+    Return an error message if too many query sequences for the interactive app,
+    else None. Genome-scale jobs are routed to the CLI, which embeds with
+    checkpointing and isn't bounded by the web request timeout.
+    """
+    if n > cap:
+        return (
+            f"Too many query sequences: {n} (interactive limit {cap}). "
+            f"For genome-scale annotation use the CLI (`cpr search` / `cpr embed`), "
+            f"which embeds with checkpointing and no request timeout."
+        )
+    return None
+
+
+def sequences_hash(sequences):
+    """
+    Stable, collision-resistant hash of an ordered list of sequences.
+
+    Used as the embedding-cache key. Joins with a separator that cannot appear in
+    an amino-acid sequence so different splits (e.g. ["AB", "CD"] vs ["ABC", "D"])
+    do not collide, unlike a bare "".join.
+    """
+    import hashlib
+
+    joined = "\x00".join(sequences)
+    return hashlib.md5(joined.encode()).hexdigest()
+
+
+def cap_matches_per_query(matches, query_key, cap):
+    """
+    Return at most `cap` matches per distinct query, preserving input order.
+
+    Used to limit how many rows are streamed to the browser table without hiding
+    whole queries: each query keeps its top `cap` hits (the input is assumed
+    already sorted best-first per query). The full match set is kept separately
+    server-side for download.
+
+    matches: list of match dicts
+    query_key: dict key identifying the query a match belongs to
+    cap: maximum rows to keep per query
+    """
+    counts = {}
+    capped = []
+    for match in matches:
+        q = match.get(query_key)
+        n = counts.get(q, 0)
+        if n < cap:
+            capped.append(match)
+            counts[q] = n + 1
+    return capped
+
+
+def lookup_index_path(embedding_path):
+    """
+    Return the sidecar FAISS index path for a given .npy embedding path.
+
+    Used by both the offline prebuild script and the Gradio loader so they agree
+    on where a prebuilt index lives, e.g.
+    "data/euk/euk_embeddings.npy" -> "data/euk/euk_embeddings.faissindex".
+    """
+    if embedding_path.endswith(".npy"):
+        return embedding_path[: -len(".npy")] + ".faissindex"
+    return embedding_path + ".faissindex"
+
+
+def load_lookup_index(embedding_path):
+    """
+    Load a lookup FAISS index, preferring a prebuilt sidecar index on disk.
+
+    When a sidecar index (see lookup_index_path) exists, it is read directly and
+    the large .npy embedding file is never loaded -- the main cold-start cost for
+    big databases. Otherwise the .npy is loaded and an exact index is built.
+
+    Returns a tuple of (faiss index, number of embeddings).
+    """
+    import os
+    import faiss
+
+    index_path = lookup_index_path(embedding_path)
+    if os.path.exists(index_path):
+        index = faiss.read_index(index_path)
+        return index, index.ntotal
+
+    embeddings = np.load(embedding_path, allow_pickle=True).astype(np.float32, copy=False)
+    index = build_index(embeddings)
+    return index, embeddings.shape[0]
+
+
+def load_or_build_index(embeddings, index_path):
+    """
+    Return a prebuilt FAISS index from disk if it exists, otherwise build it from
+    embeddings and persist it to index_path for next time.
+
+    Avoids the np.load + normalize + add work on every container cold start. The
+    persisted index is an exact IndexFlatIP, so search results are identical to
+    building on the fly.
+
+    embeddings: NxM matrix of embeddings (used only when index_path is missing)
+    index_path: path to read/write the serialized FAISS index
+    """
+    import os
+    import faiss
+
+    if index_path and os.path.exists(index_path):
+        return faiss.read_index(index_path)
+
+    index = build_index(embeddings)
+    if index_path:
+        faiss.write_index(index, index_path)
+    return index
+
+
 def query(index, queries, k=10):
     # On the fly FAISS import to prevent installation issues
     import faiss

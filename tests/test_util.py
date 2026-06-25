@@ -9,6 +9,7 @@ These tests verify:
 5. Venn-Abers probability predictions
 6. Hierarchical loss functions (for SCOPe)
 """
+import os
 import numpy as np
 import pytest
 from protein_conformal.util import (
@@ -103,6 +104,233 @@ class TestFAISSOperations:
         # All indices should be in valid range
         assert I.min() >= 0
         assert I.max() < 100  # lookup has 100 embeddings
+
+
+class TestFAISSPrebuild:
+    """Tests for prebuilt FAISS index save/load (cold-start optimization).
+
+    Exact search must be preserved bit-for-bit: a prebuilt index read from disk
+    has to return the same neighbors and similarities as building it on the fly.
+    """
+
+    def test_build_index_does_not_mutate_input(self, sample_embeddings):
+        """build_index must not normalize the caller's array in place."""
+        from protein_conformal.util import build_index
+        _, lookup_embeddings = sample_embeddings
+        original = lookup_embeddings.copy()
+
+        build_index(lookup_embeddings)
+
+        np.testing.assert_array_equal(lookup_embeddings, original)
+
+    def test_build_index_matches_load_database(self, sample_embeddings):
+        """build_index must return the same neighbors as load_database (exact search)."""
+        from protein_conformal.util import build_index
+        query_embeddings, lookup_embeddings = sample_embeddings
+
+        ref = load_database(lookup_embeddings.copy())
+        idx = build_index(lookup_embeddings.copy())
+
+        D_ref, I_ref = query(ref, query_embeddings.copy(), k=10)
+        D_new, I_new = query(idx, query_embeddings.copy(), k=10)
+
+        np.testing.assert_array_equal(I_new, I_ref)
+        np.testing.assert_allclose(D_new, D_ref, rtol=1e-6)
+
+    def test_load_or_build_index_writes_when_missing(self, sample_embeddings, tmp_path):
+        """When no prebuilt index exists, it is built and persisted to disk."""
+        from protein_conformal.util import load_or_build_index
+        _, lookup_embeddings = sample_embeddings
+        index_path = str(tmp_path / "lookup.faissindex")
+
+        index = load_or_build_index(lookup_embeddings.copy(), index_path)
+
+        assert os.path.exists(index_path)
+        assert index.ntotal == 100
+
+    def test_lookup_index_path_swaps_npy_suffix(self):
+        """The sidecar index path replaces a .npy suffix with .faissindex."""
+        from protein_conformal.util import lookup_index_path
+        assert lookup_index_path("/data/euk/euk_embeddings.npy") == "/data/euk/euk_embeddings.faissindex"
+
+    def test_lookup_index_path_appends_when_no_npy(self):
+        """Paths without a .npy suffix get .faissindex appended."""
+        from protein_conformal.util import lookup_index_path
+        assert lookup_index_path("/data/euk/euk_embeddings") == "/data/euk/euk_embeddings.faissindex"
+
+    def test_load_or_build_index_roundtrip_matches(self, sample_embeddings, tmp_path):
+        """A read-back index must return identical results to the freshly built one."""
+        from protein_conformal.util import load_or_build_index, build_index
+        query_embeddings, lookup_embeddings = sample_embeddings
+        index_path = str(tmp_path / "lookup.faissindex")
+
+        # First call builds + writes; second call reads from disk
+        load_or_build_index(lookup_embeddings.copy(), index_path)
+        read_back = load_or_build_index(lookup_embeddings.copy(), index_path)
+
+        ref = build_index(lookup_embeddings.copy())
+        D_ref, I_ref = query(ref, query_embeddings.copy(), k=10)
+        D_read, I_read = query(read_back, query_embeddings.copy(), k=10)
+
+        np.testing.assert_array_equal(I_read, I_ref)
+        np.testing.assert_allclose(D_read, D_ref, rtol=1e-6)
+
+    def test_load_lookup_index_uses_prebuilt_without_npy(self, sample_embeddings, tmp_path):
+        """When a sidecar index exists, the .npy is not required (np.load is skipped)."""
+        import faiss
+        from protein_conformal.util import load_lookup_index, build_index, lookup_index_path
+        _, lookup_embeddings = sample_embeddings
+        npy_path = str(tmp_path / "lookup.npy")  # intentionally NOT created
+        faiss.write_index(build_index(lookup_embeddings.copy()), lookup_index_path(npy_path))
+
+        index, num = load_lookup_index(npy_path)
+
+        assert not os.path.exists(npy_path)  # proves we did not depend on the array
+        assert num == 100
+        assert index.ntotal == 100
+
+    def test_load_lookup_index_builds_from_npy_when_no_sidecar(self, sample_embeddings, tmp_path):
+        """When no sidecar exists, it loads the .npy and builds an index."""
+        from protein_conformal.util import load_lookup_index, lookup_index_path
+        _, lookup_embeddings = sample_embeddings
+        npy_path = str(tmp_path / "lookup.npy")
+        np.save(npy_path, lookup_embeddings)
+        assert not os.path.exists(lookup_index_path(npy_path))
+
+        index, num = load_lookup_index(npy_path)
+
+        assert num == 100
+        assert index.ntotal == 100
+
+
+class TestQueryCountError:
+    """Tests for the interactive query-count cap (large jobs routed to the CLI)."""
+
+    def test_under_cap_returns_none(self):
+        from protein_conformal.util import query_count_error
+        assert query_count_error(10, 5000) is None
+        assert query_count_error(5000, 5000) is None  # at the cap is allowed
+
+    def test_over_cap_returns_message(self):
+        from protein_conformal.util import query_count_error
+        msg = query_count_error(5001, 5000)
+        assert msg is not None
+        assert "5001" in msg and "5000" in msg  # actual count and the cap
+
+    def test_zero_returns_none(self):
+        from protein_conformal.util import query_count_error
+        assert query_count_error(0, 5000) is None
+
+
+class TestLRUCache:
+    """Tests for the process-level LRU used to share embeddings across sessions."""
+
+    def test_get_missing_returns_none(self):
+        from protein_conformal.util import LRUCache
+        assert LRUCache(2).get("x") is None
+
+    def test_put_then_get(self):
+        from protein_conformal.util import LRUCache
+        c = LRUCache(2)
+        c.put("a", 1)
+        assert c.get("a") == 1
+
+    def test_evicts_least_recently_used(self):
+        from protein_conformal.util import LRUCache
+        c = LRUCache(2)
+        c.put("a", 1)
+        c.put("b", 2)
+        c.get("a")          # touch 'a' so 'b' is now least-recently-used
+        c.put("c", 3)       # exceeds capacity -> evicts 'b'
+        assert c.get("b") is None
+        assert c.get("a") == 1
+        assert c.get("c") == 3
+
+    def test_clear_empties_cache(self):
+        from protein_conformal.util import LRUCache
+        c = LRUCache(2)
+        c.put("a", 1)
+        c.clear()
+        assert c.get("a") is None
+
+
+class TestSequencesHash:
+    """Tests for the embedding-cache key (must not collide across splits)."""
+
+    def test_distinguishes_different_splits(self):
+        from protein_conformal.util import sequences_hash
+        # Same concatenation, different boundaries -> must differ.
+        assert sequences_hash(["AB", "CD"]) != sequences_hash(["ABC", "D"])
+        assert sequences_hash(["AB", "CD"]) != sequences_hash(["ABCD"])
+
+    def test_stable_for_same_input(self):
+        from protein_conformal.util import sequences_hash
+        assert sequences_hash(["AB", "CD"]) == sequences_hash(["AB", "CD"])
+
+    def test_order_sensitive(self):
+        from protein_conformal.util import sequences_hash
+        assert sequences_hash(["AB", "CD"]) != sequences_hash(["CD", "AB"])
+
+
+class TestDisplayCap:
+    """Tests for capping rendered table rows per query (UI payload reduction).
+
+    The browser table only needs a slice; the full match set stays server-side
+    for download. Capping per query keeps every query visible instead of letting
+    one large query crowd the others out.
+    """
+
+    def test_cap_matches_per_query_limits_each_query(self):
+        from protein_conformal.util import cap_matches_per_query
+        matches = ([{"query_meta": "A", "i": i} for i in range(5)] +
+                   [{"query_meta": "B", "i": i} for i in range(3)])
+        capped = cap_matches_per_query(matches, "query_meta", 2)
+        assert len(capped) == 4
+        assert [m["i"] for m in capped if m["query_meta"] == "A"] == [0, 1]
+        assert [m["i"] for m in capped if m["query_meta"] == "B"] == [0, 1]
+
+    def test_cap_matches_per_query_preserves_input_order(self):
+        from protein_conformal.util import cap_matches_per_query
+        matches = [
+            {"query_meta": "A", "i": 0},
+            {"query_meta": "B", "i": 0},
+            {"query_meta": "A", "i": 1},
+            {"query_meta": "B", "i": 1},
+            {"query_meta": "A", "i": 2},
+        ]
+        capped = cap_matches_per_query(matches, "query_meta", 1)
+        # First occurrence of each query, in original order.
+        assert capped == [{"query_meta": "A", "i": 0}, {"query_meta": "B", "i": 0}]
+
+    def test_cap_matches_per_query_under_cap_unchanged(self):
+        from protein_conformal.util import cap_matches_per_query
+        matches = [{"query_meta": "A", "i": 0}, {"query_meta": "A", "i": 1}]
+        assert cap_matches_per_query(matches, "query_meta", 100) == matches
+
+    def test_cap_matches_per_query_empty(self):
+        from protein_conformal.util import cap_matches_per_query
+        assert cap_matches_per_query([], "query_meta", 10) == []
+
+    def test_cap_matches_per_query_keeps_all_queries_genome_scale(self):
+        """Genome scale: the cap limits matches PER query, never drops a query."""
+        from protein_conformal.util import cap_matches_per_query
+        # 4000 queries (bacterial genome), 5 matches each, cap 200.
+        matches = [{"query_meta": f"gene_{q}", "i": j}
+                   for q in range(4000) for j in range(5)]
+        capped = cap_matches_per_query(matches, "query_meta", 200)
+        queries_out = {m["query_meta"] for m in capped}
+        assert len(queries_out) == 4000      # every query still represented
+        assert len(capped) == 4000 * 5       # all matches kept (under the cap)
+
+    def test_cap_matches_per_query_many_queries_over_cap(self):
+        """A query with more than `cap` matches is capped, others untouched."""
+        from protein_conformal.util import cap_matches_per_query
+        matches = ([{"query_meta": "big", "i": j} for j in range(500)] +
+                   [{"query_meta": f"q{q}", "i": 0} for q in range(100)])
+        capped = cap_matches_per_query(matches, "query_meta", 200)
+        queries_out = {m["query_meta"] for m in capped}
+        assert len(queries_out) == 101       # 'big' + 100 singletons all present
+        assert sum(1 for m in capped if m["query_meta"] == "big") == 200
 
 
 class TestRiskMetrics:

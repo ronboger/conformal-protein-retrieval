@@ -144,16 +144,33 @@ def _check_volume_data():
 
 @app.cls(
     image=gpu_image,
-    gpu="T4",
+    gpu="A10G",  # ~4x faster than T4 for the per-sequence T5 forwards (Syn3.0 = 149);
+                 # scales to zero, so ~cost-neutral per search (faster offsets higher rate).
     timeout=600,
     volumes={VOLUME_PATH: volume},
     secrets=[dataset_config_secret],
+    enable_memory_snapshot=True,
+    # NOTE: experimental GPU memory snapshot (enable_gpu_snapshot) segfaults on
+    # restore (exit 139) on this config and Modal falls back to a full reload that
+    # is SLOWER than a normal cold start -- removed. CPU snapshot below works.
 )
 class Embedder:
-    """GPU-accelerated protein embedding using ProtTrans + Protein-Vec."""
+    """GPU-accelerated protein embedding using ProtTrans + Protein-Vec.
 
-    @modal.enter()
+    Cold start is shrunk with a Modal memory snapshot: the expensive model load
+    (reading ~3B-param ProtTrans + Protein-Vec from the volume into CPU memory)
+    runs once during snapshot creation; cold restores skip it and only move the
+    already-loaded weights onto the GPU.
+    """
+
+    @modal.enter(snap=True)
     def load_models(self):
+        """Load models during CPU memory-snapshot creation (no GPU attached here).
+
+        Models load on CPU and the snapshot captures that state; ensure_gpu() then
+        moves them onto the GPU on each (cold or snapshot-restored) start. The
+        device line also works if a GPU happens to be present.
+        """
         import torch
         import sys
         import gc
@@ -164,7 +181,7 @@ class Embedder:
         if not os.path.exists(os.path.join(PVM_DIR, "protein_vec.ckpt")):
             raise RuntimeError(f"Protein-Vec models not found at {PVM_DIR}. Upload with: modal volume put cpr-data")
 
-        self.device = torch.device("cuda:0")
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
         # Load ProtTrans T5
         self.tokenizer = T5Tokenizer.from_pretrained(
@@ -175,9 +192,8 @@ class Embedder:
         self.model = T5EncoderModel.from_pretrained(
             "Rostlab/prot_t5_xl_uniref50",
             cache_dir=HF_CACHE,
-        )
+        ).to(self.device).eval()
         gc.collect()
-        self.model = self.model.to(self.device).eval()
 
         # Load Protein-Vec MOE
         sys.path.insert(0, PVM_DIR)
@@ -187,11 +203,10 @@ class Embedder:
             f"{PVM_DIR}/protein_vec_params.json"
         )
         self.model_deep = trans_basic_block.load_from_checkpoint(
-            f"{PVM_DIR}/protein_vec.ckpt", config=config
-        )
-        self.model_deep = self.model_deep.to(self.device).eval()
+            f"{PVM_DIR}/protein_vec.ckpt", config=config, map_location=self.device
+        ).to(self.device).eval()
 
-        # Pre-compute masks (all aspects enabled)
+        # Pre-compute masks (all aspects enabled). Kept on CPU, as before.
         sampled_keys = np.array(["TM", "PFAM", "GENE3D", "ENZYME", "MFO", "BPO", "CCO"])
         all_cols = np.array(["TM", "PFAM", "GENE3D", "ENZYME", "MFO", "BPO", "CCO"])
         masks = [all_cols[k] in sampled_keys for k in range(len(all_cols))]
@@ -199,20 +214,50 @@ class Embedder:
 
         volume.commit()  # Persist cached downloads
 
+    @modal.enter(snap=False)
+    def ensure_gpu(self):
+        """Ensure models are on the GPU after restore (no-op if GPU snapshot kept them there)."""
+        import torch
+
+        if self.device.type != "cuda" and torch.cuda.is_available():
+            self.device = torch.device("cuda:0")
+            self.model = self.model.to(self.device)
+            self.model_deep = self.model_deep.to(self.device)
+
     @modal.method()
     def embed(self, sequences: list) -> list:
-        """Embed protein sequences on GPU. Returns list of lists (JSON-safe)."""
-        import sys
-        import numpy as np
+        """Embed protein sequences on GPU. Returns list of lists (JSON-safe).
 
-        sys.path.insert(0, PVM_DIR)
-        from utils_search import featurize_prottrans, embed_vec
+        GPU-resident path: the T5 output stays on the GPU through embed_vec, instead
+        of the per-sequence GPU->CPU->GPU round-trip inside
+        utils_search.featurize_prottrans (which was written for single-protein
+        convenience, not throughput). fp16 autocast on the large ProtTrans T5; the
+        small Protein-Vec head stays fp32 (its fp16 attention hits a cuDNN error).
+        Verified bit-identical to the original path -- see scripts/verify_gpu_resident.py.
+        """
+        import re
+        import numpy as np
+        import torch
+
+        from utils_search import embed_vec  # PVM_DIR already on sys.path from load_models
 
         embeddings = []
-        for seq in sequences:
-            pt = featurize_prottrans([seq], self.model, self.tokenizer, self.device)
-            emb = embed_vec(pt, self.model_deep, self.masks, self.device)
-            embeddings.append(emb)
+        with torch.no_grad():
+            for seq in sequences:
+                # Replicate featurize_prottrans tokenization (space-separated residues,
+                # rare residues -> X, truncate to 3000), but keep everything on GPU.
+                prepped = re.sub(r"[UZOB]", "X", " ".join(seq[:3000]))
+                ids = self.tokenizer.batch_encode_plus(
+                    [prepped], add_special_tokens=True, padding=True
+                )
+                input_ids = torch.tensor(ids["input_ids"]).to(self.device)
+                attn = torch.tensor(ids["attention_mask"]).to(self.device)
+                with torch.autocast("cuda", dtype=torch.float16):
+                    hidden = self.model(input_ids=input_ids, attention_mask=attn).last_hidden_state
+                seq_len = int(attn[0].sum())
+                pt = hidden[0, : seq_len - 1].float().unsqueeze(0)  # stays on GPU
+                emb = embed_vec(pt, self.model_deep, self.masks, self.device)
+                embeddings.append(np.asarray(emb, dtype=np.float32))
 
         result = np.concatenate(embeddings)
         return result.tolist()
@@ -317,9 +362,14 @@ def ui():
     """Serve the Gradio interface, with embedding offloaded to GPU."""
     import os
     import sys
+    import logging
     import numpy as np
     from fastapi import FastAPI
     from gradio.routes import mount_gradio_app
+
+    # Surface StageTimer (gradio_interface logs per-stage durations at INFO) in
+    # Modal logs so we can see the embed/faiss/packaging breakdown.
+    logging.basicConfig(level=logging.INFO, force=True)
 
     os.environ.setdefault("MPLCONFIGDIR", "/tmp/mpl")
 
@@ -348,21 +398,39 @@ def ui():
     # Monkey-patch the embedding function to use the GPU Embedder
     import protein_conformal.backend.gradio_interface as gi
 
-    GPU_TIMEOUT = 300  # seconds — fail loudly rather than hang forever
+    GPU_TIMEOUT = 600  # seconds — headroom for up to MAX_QUERY_SEQUENCES on A10G;
+                       # still fails loudly rather than hanging forever (matches cls timeout)
+
+    FANOUT_THRESHOLD = 600  # at/below this, one container (fan-out's per-container
+                            # cold start would dominate); above, split across GPUs
+    FANOUT_CHUNK = 400      # sequences per container when fanning out
 
     def gpu_embed(sequences, progress=None):
-        """Call Modal GPU function for protein embedding."""
+        """Call Modal GPU function for protein embedding.
+
+        Genome-scale inputs fan out across containers: split into chunks, embed in
+        parallel, concatenate in order. Small inputs use a single container.
+        """
         if progress:
             progress(0.1, desc="Sending sequences to GPU...")
         embedder = Embedder()
-        future = embedder.embed.spawn(sequences)
+        if len(sequences) <= FANOUT_THRESHOLD:
+            chunks = [sequences]
+        else:
+            chunks = [sequences[i:i + FANOUT_CHUNK] for i in range(0, len(sequences), FANOUT_CHUNK)]
+            if progress:
+                progress(0.2, desc=f"Embedding {len(sequences)} sequences across {len(chunks)} GPUs...")
         try:
-            result = future.get(timeout=GPU_TIMEOUT)
+            # spawn() returns immediately, so all chunks run in parallel; get()
+            # gathers them in submission (sequence) order.
+            futures = [embedder.embed.spawn(c) for c in chunks]
+            parts = [np.array(f.get(timeout=GPU_TIMEOUT), dtype=np.float32) for f in futures]
+            arr = parts[0] if len(parts) == 1 else np.concatenate(parts)
         except TimeoutError:
             raise TimeoutError(f"Protein-Vec embedding timed out after {GPU_TIMEOUT}s. Try fewer/shorter sequences.")
         if progress:
             progress(0.9, desc="Embeddings received from GPU!")
-        return np.array(result, dtype=np.float32)
+        return arr
 
     gi.run_embed_protein_vec = gpu_embed
 

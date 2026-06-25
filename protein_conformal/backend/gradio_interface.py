@@ -23,7 +23,7 @@ import pandas as pd
 from Bio import SeqIO
 from typing import List, Union, Tuple, Dict, Optional, Any, Set
 
-from protein_conformal.util import load_database, query, read_fasta, get_sims_labels, get_thresh_new_FDR, get_thresh_new, risk, calculate_false_negatives, simplifed_venn_abers_prediction
+from protein_conformal.util import load_lookup_index, query, read_fasta, get_sims_labels, get_thresh_new_FDR, get_thresh_new, risk, calculate_false_negatives, simplifed_venn_abers_prediction, cap_matches_per_query, sequences_hash, LRUCache, query_count_error
 
 
 logger = logging.getLogger(__name__)
@@ -192,6 +192,16 @@ DEFAULT_CLEAN_THRESHOLDS = "./results/clean_thresholds.csv" # CLEAN hierarchical
 CUSTOM_UPLOAD_EMBEDDING = "./data/custom_uploaded_embedding.npy" # path to the custom uploaded embeddings
 CUSTOM_UPLOAD_METADATA = "./data/custom_uploaded_metadata.tsv" # path to the custom uploaded metadata
 
+# Max rows rendered in the browser table per query. The full match set is always
+# kept server-side (session/export) so downloads return everything; this only
+# bounds the SSE payload sent to the browser.
+DISPLAY_ROWS_PER_QUERY = 200
+
+# Max query sequences for the interactive app. Must stay within the GPU embed
+# timeout (gpu_embed .get(timeout=...)); genome-scale jobs are routed to the CLI
+# (checkpointed, no timeout). Tunable; validated against the A10G embed rate.
+MAX_QUERY_SEQUENCES = 5000
+
 # Amino acid validation constants
 VALID_AA = set('ACDEFGHIKLMNPQRSTVWY')
 SPECIAL_CHARS = set('XUB')  # X=unknown, U=selenocysteine, B=ambiguous D/N
@@ -238,6 +248,23 @@ class StageTimer:
 
 LOOKUP_RESOURCE_CACHE: Dict[Tuple[str, Optional[float], str, Optional[float]], Dict[str, Any]] = {}
 LOOKUP_RESOURCE_LOCK = threading.Lock()
+# Per-key build locks for singleflight index construction (see get_lookup_resources).
+LOOKUP_BUILD_LOCKS: Dict[Any, threading.Lock] = {}
+
+
+def _get_lookup_build_lock(cache_key) -> threading.Lock:
+    """Return the (created-on-demand) build lock for a lookup cache key."""
+    with LOOKUP_RESOURCE_LOCK:
+        lock = LOOKUP_BUILD_LOCKS.get(cache_key)
+        if lock is None:
+            lock = threading.Lock()
+            LOOKUP_BUILD_LOCKS[cache_key] = lock
+        return lock
+
+# Process-level embedding cache shared across sessions/users: common queries skip
+# the GPU round-trip. Keyed on embedding-mode + sequences_hash. Deterministic, so
+# sharing across users is safe (unlike per-user search results).
+EMBEDDING_CACHE = LRUCache(256)
 
 # build a cache_key tuple from the absolute path and m
 
@@ -288,9 +315,9 @@ def _load_lookup_metadata(metadata_path: str) -> Tuple[str, List[str], List[Any]
         sequences, lookup_meta = read_fasta(metadata_path)
         return "fasta", sequences, lookup_meta
 
-# When multiple searches hit the same lookup database without those files changing, 
-# get_lookup_resources returns the preloaded FAISS index + metadata, so we avoid 
-# repeating the expensive np.load + load_database work.
+# When multiple searches hit the same lookup database without those files changing,
+# get_lookup_resources returns the preloaded FAISS index + metadata, so we avoid
+# repeating the expensive np.load + index build work.
 def get_lookup_resources(embedding_path: str, metadata_path: str) -> Dict[str, Any]:
     embedding_path = ensure_local_data_file(embedding_path)
     metadata_path = ensure_local_data_file(metadata_path)
@@ -303,22 +330,34 @@ def get_lookup_resources(embedding_path: str, metadata_path: str) -> Dict[str, A
         if cached:
             return cached
 
-    embeddings = np.load(embedding_path, allow_pickle=True).astype(np.float32, copy=False)
-    metadata_kind, lookup_seqs, lookup_meta = _load_lookup_metadata(metadata_path)
-    lookup_index = load_database(embeddings.copy())
+    # Singleflight: only one thread builds a given DB; concurrent cold-start
+    # requests for the same key wait on the per-key lock instead of each loading
+    # the ~1 GB embeddings and rebuilding the index.
+    build_lock = _get_lookup_build_lock(cache_key)
+    with build_lock:
+        # Re-check: another thread may have built it while we waited for the lock.
+        with LOOKUP_RESOURCE_LOCK:
+            cached = LOOKUP_RESOURCE_CACHE.get(cache_key)
+            if cached:
+                return cached
 
-    resource = {
-        "index": lookup_index,
-        "lookup_seqs": lookup_seqs,
-        "lookup_meta": lookup_meta,
-        "metadata_kind": metadata_kind,
-        "num_embeddings": embeddings.shape[0],
-    }
+        metadata_kind, lookup_seqs, lookup_meta = _load_lookup_metadata(metadata_path)
+        # Prefer a prebuilt FAISS index (scripts/prebuild_faiss.py). When present, the
+        # ~1 GB .npy is never loaded -- the main cold-start cost for big databases.
+        lookup_index, num_embeddings = load_lookup_index(embedding_path)
 
-    with LOOKUP_RESOURCE_LOCK:
-        LOOKUP_RESOURCE_CACHE[cache_key] = resource
+        resource = {
+            "index": lookup_index,
+            "lookup_seqs": lookup_seqs,
+            "lookup_meta": lookup_meta,
+            "metadata_kind": metadata_kind,
+            "num_embeddings": num_embeddings,
+        }
 
-    return resource
+        with LOOKUP_RESOURCE_LOCK:
+            LOOKUP_RESOURCE_CACHE[cache_key] = resource
+
+        return resource
 
 
 def parse_fasta(fasta_content: str) -> Tuple[List[str], List[str]]:
@@ -337,49 +376,50 @@ def parse_fasta(fasta_content: str) -> Tuple[List[str], List[str]]:
         metadata.append(f">{record.id} {record.description}" if record.description != record.id else f">{record.id}")
     return sequences, metadata
 
-def process_uploaded_file(file_obj) -> Tuple[List[str], List[str]]:
+def _read_uploaded_text(file_obj) -> Optional[str]:
     """
-    Process an uploaded FASTA file from Gradio's File component.
+    Read the raw text of a Gradio File upload, or None if unreadable.
 
-    Supports the different object types that Gradio may hand over:
+    Supports the different object types Gradio may hand over:
     - file-like objects exposing .read()
     - temporary files with a .name attribute
     - plain filesystem paths (default when type='filepath')
     - dictionaries containing 'path'/'name' metadata
     """
     if file_obj is None:
-        return [], []
-
-    def _read_text(handle) -> str:
-        data = handle.read()
-        if isinstance(data, bytes):
-            data = data.decode("utf-8", errors="replace")
-        return data
-
-    fasta_text: Optional[str] = None
+        return None
 
     if hasattr(file_obj, "read"):
-        fasta_text = _read_text(file_obj)
+        data = file_obj.read()
+        return data.decode("utf-8", errors="replace") if isinstance(data, bytes) else data
+
+    candidate_paths: List[Optional[str]] = []
+    if isinstance(file_obj, dict):
+        candidate_paths.extend([file_obj.get("path"), file_obj.get("name")])
     else:
-        candidate_paths: List[Optional[str]] = []
-        if isinstance(file_obj, dict):
-            candidate_paths.extend([file_obj.get("path"), file_obj.get("name")])
-        else:
-            candidate_paths.append(getattr(file_obj, "name", None))
-            if isinstance(file_obj, str):
-                candidate_paths.append(file_obj)
+        candidate_paths.append(getattr(file_obj, "name", None))
+        if isinstance(file_obj, str):
+            candidate_paths.append(file_obj)
 
-        for path in candidate_paths:
-            if not path:
-                continue
-            if os.path.exists(path):
-                with open(path, "rb") as fh:
-                    fasta_text = fh.read().decode("utf-8", errors="replace")
-                break
+    for path in candidate_paths:
+        if path and os.path.exists(path):
+            with open(path, "rb") as fh:
+                return fh.read().decode("utf-8", errors="replace")
+    return None
 
+
+def load_uploaded_fasta(file_obj) -> str:
+    """Upload handler: show the uploaded FASTA's content in the text box above."""
+    return _read_uploaded_text(file_obj) or ""
+
+
+def process_uploaded_file(file_obj) -> Tuple[List[str], List[str]]:
+    """Process an uploaded FASTA file from Gradio's File component into sequences."""
+    if file_obj is None:
+        return [], []
+    fasta_text = _read_uploaded_text(file_obj)
     if not fasta_text:
         raise AttributeError("Uploaded FASTA file is not readable and has no accessible path.")
-
     return parse_fasta(fasta_text)
 
 def run_embed_protein_vec(sequences: List[str], progress=gr.Progress()) -> np.ndarray:
@@ -769,6 +809,7 @@ def process_input(input_text: str,
     ``on_submit``.
     """
     stage_timer = StageTimer()
+    t_start = time.perf_counter()
     try:
         summary, df, session_out = _process_input_impl(
             stage_timer,
@@ -790,6 +831,9 @@ def process_input(input_text: str,
             session,
             progress,
         )
+        # Surface total search wall-time in the summary the user sees.
+        if isinstance(summary, dict):
+            summary["search_time_seconds"] = round(time.perf_counter() - t_start, 2)
         return json.dumps(summary, indent=2, default=str), df, session_out
     finally:
         stage_timer.log_summary()
@@ -837,7 +881,6 @@ def _process_input_impl(stage_timer: StageTimer,
         - Table data (for the DataFrame display)
         - Complete results (for the raw JSON output)
     """
-    import hashlib
 
     # Ensure risk_value is numeric (Dropdown may return a string)
     risk_value = float(risk_value)
@@ -856,6 +899,10 @@ def _process_input_impl(stage_timer: StageTimer,
     if not sequences and custom_embeddings is None:
         return {"error": "No sequences found in the FASTA input. Please check your input format."}, pd.DataFrame(), (session or {})
 
+    too_many = query_count_error(len(sequences), MAX_QUERY_SEQUENCES)
+    if too_many:
+        return {"error": too_many}, pd.DataFrame(), (session or {})
+
     # Ensure conformal_results is initialized
     conformal_results = {}
 
@@ -873,7 +920,7 @@ def _process_input_impl(stage_timer: StageTimer,
             return {"error": f"Error processing custom metadata: {str(e)}"}, pd.DataFrame(), (session or {})
 
     # ---- Caching: reuse embeddings and FAISS results across parameter changes ----
-    input_hash = hashlib.md5("".join(sequences).encode()).hexdigest()
+    input_hash = sequences_hash(sequences)
     cached = (session or {}).get("_cache", {})
     new_cache = cached  # preserved unless a fresh search overwrites it below
     embeddings = None
@@ -888,9 +935,16 @@ def _process_input_impl(stage_timer: StageTimer,
     elif use_protein_vec and not custom_embeddings:
         try:
             progress(0.1, desc="Starting embedding process...")
-            with stage_timer.track("protein_vec_embedding"):
-                embeddings = run_embed_protein_vec(sequences, progress)
-            progress(0.6, desc="Embeddings complete!")
+            emb_key = f"protein_vec:{input_hash}"
+            embeddings = EMBEDDING_CACHE.get(emb_key)
+            if embeddings is not None:
+                logger.info("Process-level embedding cache hit for %d sequences", len(sequences))
+                progress(0.6, desc="Using shared cached embeddings...")
+            else:
+                with stage_timer.track("protein_vec_embedding"):
+                    embeddings = run_embed_protein_vec(sequences, progress)
+                EMBEDDING_CACHE.put(emb_key, embeddings)
+                progress(0.6, desc="Embeddings complete!")
         except Exception as e:
             return {"error": f"Error generating embeddings: {str(e)}"}, pd.DataFrame(), (session or {})
     elif custom_embeddings:
@@ -1081,7 +1135,10 @@ def _process_input_impl(stage_timer: StageTimer,
             all_matches = [m for m in all_matches if m.get(p0_key, 0) >= min_probability]
 
         total_matches = len(all_matches)
-        results_df = pd.DataFrame(all_matches) if all_matches else pd.DataFrame()
+        # Only the table display is capped; all_matches (full set) still flows into
+        # the session for download/export below.
+        display_matches = cap_matches_per_query(all_matches, "query_meta", DISPLAY_ROWS_PER_QUERY)
+        results_df = pd.DataFrame(display_matches) if display_matches else pd.DataFrame()
 
         with stage_timer.track("results_packaging"):
             # Build summary
@@ -1108,6 +1165,12 @@ def _process_input_impl(stage_timer: StageTimer,
                 "match_type": conformal_results["match_type"],
                 "max_k": max_results,
             }
+            # Table is capped per query; tell the user the download has the rest.
+            if len(display_matches) < total_matches:
+                summary["display_note"] = (
+                    f"Showing {len(display_matches)} of {total_matches} matches "
+                    f"(top {DISPLAY_ROWS_PER_QUERY} per query). Use Download to get all."
+                )
             # Threshold >= 1.0 warning
             if not is_prob_filter and conformal_results["threshold"] >= 1.0:
                 summary["warning"] = "Threshold >= 1.0: no results can pass at this alpha level. Try a less strict (higher) alpha."
@@ -1475,8 +1538,10 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                         lookup_db_state = gr.State(value=DEFAULT_LOOKUP_EMBEDDING)
                         metadata_db_state = gr.State(value=DEFAULT_LOOKUP_METADATA)
 
-                        # Submit button
+                        # Submit button. Stop replaces it (same spot) only while a
+                        # search is running -> no extra real estate. Wired below.
                         submit_btn = gr.Button("Search", variant="primary", size="lg")
+                        stop_btn = gr.Button("⏹ Stop", variant="stop", size="lg", visible=False)
 
                 # Results section
                 gr.Markdown("### Results")
@@ -1638,6 +1703,9 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
         example_btn_insulin.click(fn=load_insulin, outputs=[fasta_text])
         example_btn_syn30.click(fn=load_syn30, outputs=[fasta_text])
 
+        # Uploading a FASTA file shows its content in the text box above.
+        upload_file.upload(fn=load_uploaded_fasta, inputs=[upload_file], outputs=[fasta_text])
+
         # Export functionality
         export_btn.click(
             fn=export_current_results,
@@ -1784,7 +1852,17 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                     session,
                 )
 
-        submit_btn.click(
+        # Toggle Search <-> Stop around the search so Stop occupies Search's spot
+        # only while running (no extra real estate).
+        def _searching():
+            return gr.update(visible=False), gr.update(visible=True)
+
+        def _idle():
+            return gr.update(visible=True), gr.update(visible=False)
+
+        search_event = submit_btn.click(
+            fn=_searching, inputs=None, outputs=[submit_btn, stop_btn]
+        ).then(
             fn=on_submit,
             inputs=[
                 analysis_mode,
@@ -1798,6 +1876,10 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
             ],
             outputs=[results_summary, results_table, query_filter, sequence_detail, prob_plot, session_state]
         )
+        # Revert to Search when the search finishes normally.
+        search_event.then(fn=_idle, inputs=None, outputs=[submit_btn, stop_btn])
+        # Stop: revert the button and cancel the in-flight search event.
+        stop_btn.click(fn=_idle, inputs=None, outputs=[submit_btn, stop_btn], cancels=[search_event])
 
         # Per-query filtering
         def filter_by_query(query_choice, session):

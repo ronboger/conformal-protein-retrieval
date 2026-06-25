@@ -53,11 +53,22 @@ def cmd_embed(args):
     print(f"Saved embeddings to {args.output}")
 
 
+def _should_use_fp16(fast, device):
+    """Whether to run fp16 'fast mode'.
+
+    fp16 autocast only applies on a CUDA GPU (it's a no-op/error on CPU), and only
+    when the user asked for it. Accepts a torch.device or a plain string.
+    """
+    device_type = getattr(device, "type", device)
+    return bool(fast) and device_type == "cuda"
+
+
 def _embed_protein_vec(sequences, device, args):
     """Embed using Protein-Vec model."""
     import numpy as np
     import torch
     import gc
+    import contextlib
     from transformers import T5EncoderModel, T5Tokenizer
 
     repo_root = Path(__file__).parent.parent
@@ -105,10 +116,21 @@ def _embed_protein_vec(sequences, device, args):
         embeddings = [partial[i:i+1] for i in range(len(partial))]
         print(f"Resuming from checkpoint: {start_idx}/{len(sequences)} already embedded")
 
+    use_fp16 = _should_use_fp16(getattr(args, "fast", False), device)
+    if use_fp16:
+        print("Fast mode: fp16 (half-precision) ProtTrans embedding")
+
     print(f"Embedding sequences {start_idx}..{len(sequences)}...")
     for i in range(start_idx, len(sequences)):
         seq = sequences[i]
-        protrans_seq = featurize_prottrans([seq], model, tokenizer, device)
+        # Fast mode: autocast only the large ProtTrans T5 (the cost); the Protein-Vec
+        # head stays fp32. Verified to preserve results exactly (cosine 1.0, same
+        # Syn3.0 annotations) -- see scripts/verify_fp16.py.
+        autocast = torch.autocast("cuda", dtype=torch.float16) if use_fp16 else contextlib.nullcontext()
+        with autocast:
+            protrans_seq = featurize_prottrans([seq], model, tokenizer, device)
+        if use_fp16:
+            protrans_seq = protrans_seq.float()
         emb = embed_vec(protrans_seq, model_deep, masks, device)
         embeddings.append(emb)
         if (i + 1) % 10 == 0 or i == len(sequences) - 1:
@@ -630,6 +652,9 @@ def main():
                           help='CLEAN model variant (default: split100)')
     p_search.add_argument('--cpu', action='store_true',
                           help='Force CPU even if GPU available')
+    p_search.add_argument('--fast', action='store_true',
+                          help='Fast mode: fp16 (half-precision) ProtTrans embedding on GPU '
+                               'for FASTA input. Verified to preserve results; ignored on CPU.')
     p_search.add_argument('--calibration', '-c',
                           help='Calibration data for probabilities (default: data/pfam_new_proteins.npy)')
     # Threshold options (mutually exclusive)
@@ -654,6 +679,9 @@ def main():
                          choices=['protein-vec', 'clean'],
                          help='Embedding model (default: protein-vec)')
     p_embed.add_argument('--cpu', action='store_true', help='Force CPU even if GPU available')
+    p_embed.add_argument('--fast', action='store_true',
+                         help='Fast mode: fp16 (half-precision) ProtTrans embedding on GPU. '
+                              'Verified to preserve results; ignored on CPU. (protein-vec only)')
     p_embed.add_argument('--clean-model', default='split100',
                          help='CLEAN model variant (default: split100)')
     p_embed.set_defaults(func=cmd_embed)
