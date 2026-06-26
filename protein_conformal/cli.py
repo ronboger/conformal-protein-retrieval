@@ -493,24 +493,15 @@ def cmd_verify(args):
 
 
 def cmd_prob(args):
-    """Convert similarity scores to calibrated probabilities using Venn-Abers."""
+    """Convert similarity scores to calibrated probabilities using Venn-Abers.
+
+    Uses a precomputed lookup table (data/sim2prob_lookup.csv) for O(n)
+    interpolation instead of fitting isotonic regressions per-row.
+    Falls back to per-row fitting if no lookup table is found.
+    """
     import numpy as np
     import pandas as pd
-    from protein_conformal.util import simplifed_venn_abers_prediction, get_sims_labels
-
-    print(f"Loading calibration data from {args.calibration}...")
-    cal_data = np.load(args.calibration, allow_pickle=True)
-
-    # Prepare calibration data
-    n_calib = min(args.n_calib, len(cal_data))
-    np.random.seed(args.seed)
-    np.random.shuffle(cal_data)
-    cal_subset = cal_data[:n_calib]
-
-    X_cal, y_cal = get_sims_labels(cal_subset, partial=False)
-    X_cal = X_cal.flatten()
-    y_cal = y_cal.flatten()
-    print(f"  Using {n_calib} calibration samples ({len(X_cal)} pairs)")
+    from pathlib import Path
 
     # Load input scores
     if args.input.endswith('.csv'):
@@ -523,31 +514,64 @@ def cmd_prob(args):
 
     print(f"Computing probabilities for {len(scores)} scores...")
 
-    # Compute Venn-Abers probabilities
-    probs = []
-    uncertainties = []
-    for i, score in enumerate(scores):
-        p0, p1 = simplifed_venn_abers_prediction(X_cal, y_cal, score)
-        prob = (p0 + p1) / 2  # Point estimate
-        uncertainty = abs(p1 - p0)
-        probs.append(prob)
-        uncertainties.append(uncertainty)
-        if (i + 1) % 1000 == 0:
-            print(f"  Processed {i + 1}/{len(scores)}")
+    # Try precomputed lookup table first (O(n) via interpolation)
+    lookup_path = getattr(args, 'lookup', None)
+    if lookup_path is None:
+        # Default: look next to calibration data
+        lookup_path = Path(args.calibration).parent / "sim2prob_lookup.csv"
+
+    if Path(lookup_path).exists():
+        print(f"Using precomputed lookup table: {lookup_path}")
+        lookup = pd.read_csv(lookup_path)
+        sim_bins = lookup['similarity'].values
+        p0_bins = lookup['p0'].values if 'p0' in lookup.columns else lookup['prob_exact_p0'].values
+        p1_bins = lookup['p1'].values if 'p1' in lookup.columns else lookup['prob_exact_p1'].values
+
+        # Vectorized interpolation -- O(n)
+        p0_vals = np.interp(scores, sim_bins, p0_bins)
+        p1_vals = np.interp(scores, sim_bins, p1_bins)
+        probs = (p0_vals + p1_vals) / 2
+        uncertainties = np.abs(p1_vals - p0_vals)
+        print(f"  Interpolated {len(scores)} scores in O(n) time")
+    else:
+        print(f"WARNING: No lookup table at {lookup_path}")
+        print("  Falling back to per-row isotonic regression (slow for large inputs)")
+        print("  Generate lookup with: python scripts/precompute_SVA_probs.py")
+        from protein_conformal.util import simplifed_venn_abers_prediction, get_sims_labels
+
+        print(f"Loading calibration data from {args.calibration}...")
+        cal_data = np.load(args.calibration, allow_pickle=True)
+        n_calib = min(args.n_calib, len(cal_data))
+        np.random.seed(args.seed)
+        np.random.shuffle(cal_data)
+        cal_subset = cal_data[:n_calib]
+        X_cal, y_cal = get_sims_labels(cal_subset, partial=False)
+        X_cal = X_cal.flatten()
+        y_cal = y_cal.flatten()
+        print(f"  Using {n_calib} calibration samples ({len(X_cal)} pairs)")
+
+        probs = []
+        uncertainties = []
+        for i, score in enumerate(scores):
+            p0, p1 = simplifed_venn_abers_prediction(X_cal, y_cal, score)
+            probs.append((p0 + p1) / 2)
+            uncertainties.append(abs(p1 - p0))
+            if (i + 1) % 1000 == 0:
+                print(f"  Processed {i + 1}/{len(scores)}")
+        probs = np.array(probs)
+        uncertainties = np.array(uncertainties)
 
     # Output results
-    results = pd.DataFrame({
-        'score': scores,
-        'probability': probs,
-        'uncertainty': uncertainties,
-    })
-
-    # If input was CSV, merge with original
     if args.input.endswith('.csv'):
-        for col in ['probability', 'uncertainty']:
-            df[col] = results[col]
+        df['probability'] = probs
+        df['uncertainty'] = uncertainties
         df.to_csv(args.output, index=False)
     else:
+        results = pd.DataFrame({
+            'score': scores,
+            'probability': probs,
+            'uncertainty': uncertainties,
+        })
         results.to_csv(args.output, index=False)
 
     print(f"Saved probabilities to {args.output}")
@@ -697,7 +721,12 @@ def main():
     p_prob.add_argument('--input', '-i', required=True,
                         help='Input scores (.npy or .csv with score column)')
     p_prob.add_argument('--calibration', '-c', required=True,
-                        help='Calibration data (.npy, e.g., pfam_new_proteins.npy)')
+                        help='Calibration data (.npy, e.g., pfam_new_proteins.npy); '
+                             'used for the per-row fallback and to locate the default lookup table')
+    p_prob.add_argument('--lookup', default=None,
+                        help='Precomputed similarity->probability lookup CSV for O(n) interpolation '
+                             '(default: sim2prob_lookup.csv next to --calibration; '
+                             'generate with scripts/precompute_SVA_probs.py)')
     p_prob.add_argument('--output', '-o', required=True, help='Output CSV with probabilities')
     p_prob.add_argument('--score-column', default='similarity',
                         help='Column name for scores if input is CSV (default: similarity)')
