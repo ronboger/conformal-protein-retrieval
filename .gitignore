@@ -9,6 +9,8 @@ data/*.pdf
 data/*.fasta
 data/*.npz
 data/*.npy
+# tracked exception: small reproducible lookup table for `cpr prob` (O(n) path)
+!data/sim2prob_lookup.csv
 data/afdb/
 data/euk/
 data/scope_swissprot_large/
