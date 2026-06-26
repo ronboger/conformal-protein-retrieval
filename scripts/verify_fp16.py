@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from torch.nn.attention import sdpa_kernel, SDPBackend
 
 REPO = Path(__file__).parent.parent
 MAIN = Path("/groups/doudna/projects/ronb/conformal-protein-retrieval")
@@ -49,6 +50,10 @@ def main():
     m = [all_cols[k] in sampled_keys for k in range(len(all_cols))]
     masks = torch.logical_not(torch.tensor(m, dtype=torch.bool))[None, :].to(device)
 
+    # Head SDPA backends: everything but cuDNN (which raises "no execution plan"
+    # under fp16 on the A10G). Matches modal_app.Embedder.embed.
+    head_backends = [SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH]
+
     seqs, meta = read_fasta(str(DATA / "gene_unknown" / "unknown_aa_seqs.fasta"))
     print(f"Embedding {len(seqs)} Syn3.0 sequences (fp32 and fp16) ...", flush=True)
 
@@ -56,13 +61,14 @@ def main():
         out = []
         for s in seqs:
             if fp16:
-                # Autocast only the large ProtTrans T5 (where ~all the cost is);
-                # keep the small Protein-Vec head in fp32. Its fp16 attention hits
-                # a cuDNN SDPA "no execution plan" error and it's cheap anyway.
+                # Autocast the large ProtTrans T5 AND the Protein-Vec head (matches
+                # the deployed path). The head's fp16 attention hits a cuDNN SDPA
+                # "no execution plan" error, so exclude the cuDNN backend.
                 with torch.autocast("cuda", dtype=torch.float16):
                     pt = featurize_prottrans([s], model, tok, device)
                 pt = pt.float()
-                e = embed_vec(pt, model_deep, masks, device)
+                with torch.autocast("cuda", dtype=torch.float16), sdpa_kernel(head_backends):
+                    e = embed_vec(pt, model_deep, masks, device)
             else:
                 pt = featurize_prottrans([s], model, tok, device)
                 e = embed_vec(pt, model_deep, masks, device)

@@ -245,15 +245,22 @@ class Embedder:
         GPU-resident path: the T5 output stays on the GPU through embed_vec, instead
         of the per-sequence GPU->CPU->GPU round-trip inside
         utils_search.featurize_prottrans (which was written for single-protein
-        convenience, not throughput). fp16 autocast on the large ProtTrans T5; the
-        small Protein-Vec head stays fp32 (its fp16 attention hits a cuDNN error).
-        Verified bit-identical to the original path -- see scripts/verify_gpu_resident.py.
+        convenience, not throughput). fp16 autocast on both the large ProtTrans T5
+        and the Protein-Vec head. The head's fp16 attention hit a cuDNN "no execution
+        plan" error on the A10G, so we exclude the cuDNN SDPA backend (flash/
+        mem-efficient/math are fine) -- ~1.25x on the head, cosine 1.0, Syn3.0 59/149.
+        Verified bit-identical to the original path -- see scripts/verify_fp16.py.
         """
         import re
         import numpy as np
         import torch
+        from torch.nn.attention import sdpa_kernel, SDPBackend
 
         from utils_search import embed_vec  # PVM_DIR already on sys.path from load_models
+
+        # SDPA backends allowed for the Protein-Vec head: anything but cuDNN, which
+        # raises "no execution plan" under fp16 on the A10G.
+        head_backends = [SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH]
 
         embeddings = []
         with torch.no_grad():
@@ -270,7 +277,8 @@ class Embedder:
                     hidden = self.model(input_ids=input_ids, attention_mask=attn).last_hidden_state
                 seq_len = int(attn[0].sum())
                 pt = hidden[0, : seq_len - 1].float().unsqueeze(0)  # stays on GPU
-                emb = embed_vec(pt, self.model_deep, self.masks, self.device)
+                with torch.autocast("cuda", dtype=torch.float16), sdpa_kernel(head_backends):
+                    emb = embed_vec(pt, self.model_deep, self.masks, self.device)
                 embeddings.append(np.asarray(emb, dtype=np.float32))
 
         result = np.concatenate(embeddings)

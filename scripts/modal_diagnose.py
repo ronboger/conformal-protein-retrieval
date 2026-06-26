@@ -27,6 +27,7 @@ def diagnose():
     import time
     import torch
     import numpy as np
+    from torch.nn.attention import sdpa_kernel, SDPBackend
 
     sys.path.insert(0, PVM_DIR)
     from transformers import T5EncoderModel, T5Tokenizer
@@ -55,6 +56,9 @@ def diagnose():
     ).to(device).eval()
     keys = np.array(["TM", "PFAM", "GENE3D", "ENZYME", "MFO", "BPO", "CCO"])
     masks = torch.logical_not(torch.tensor([keys[k] in keys for k in range(len(keys))], dtype=torch.bool))[None, :]
+    # Head now runs fp16 with cuDNN SDPA excluded (matches modal_app.Embedder.embed);
+    # the "head" timing below reflects the deployed fp16 head.
+    head_backends = [SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH]
 
     seqs, cur = [], []
     for line in open(f"{VOLUME_PATH}/data/gene_unknown/unknown_aa_seqs.fasta"):
@@ -87,7 +91,8 @@ def diagnose():
         sl = int(attn[0].sum())
         pt = hidden[0, : sl - 1].float().unsqueeze(0)
         torch.cuda.synchronize(); t0 = time.perf_counter()
-        embed_vec(pt, model_deep, masks, device)
+        with torch.autocast("cuda", dtype=torch.float16), sdpa_kernel(head_backends):
+            embed_vec(pt, model_deep, masks, device)
         torch.cuda.synchronize(); acc["head"] += time.perf_counter() - t0
 
     warm = {"tokenize": 0, "h2d": 0, "t5": 0, "head": 0}
