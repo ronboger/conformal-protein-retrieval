@@ -1604,6 +1604,7 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                             visible=False,
                         )
 
+                        search_timer_md = gr.Markdown("")
                         results_summary = gr.Code(language="json", label="Search Summary", interactive=False)
 
                         with gr.Row():
@@ -1827,6 +1828,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
         def on_submit(mode, fasta, upload, risk_t, risk_v, max_k, use_pv, custom_emb,
                       lookup, metadata, custom_lookup, custom_meta, m_type,
                       min_prob, hide_unc, c_alpha, session):
+            _t0 = time.perf_counter()
             if mode == "Enzyme Classification (CLEAN)":
                 # CLEAN enzyme classification pipeline
                 summary_json, df, session = process_clean_input(
@@ -1840,6 +1842,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                     unique_queries = []
                     choices = ["All queries"]
                 return (
+                    f"**⏱ Search completed in {time.perf_counter() - _t0:.1f}s**",
                     summary_json,
                     df,
                     gr.Dropdown(choices=choices, value=unique_queries[0] if unique_queries else "All queries"),
@@ -1868,6 +1871,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 plot_label = unique_queries[0] if unique_queries else None
                 fig = _build_prob_plot(session, query_label=plot_label)
                 return (
+                    f"**⏱ Search completed in {time.perf_counter() - _t0:.1f}s**",
                     summary_json,
                     df,
                     gr.Dropdown(choices=choices, value=unique_queries[0] if unique_queries else "All queries"),
@@ -1898,7 +1902,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 clean_alpha,
                 session_state,
             ],
-            outputs=[results_summary, results_table, query_filter, sequence_detail, prob_plot, session_state]
+            outputs=[search_timer_md, results_summary, results_table, query_filter, sequence_detail, prob_plot, session_state]
         )
         # Revert to Search when the search finishes normally.
         search_event.then(fn=_idle, inputs=None, outputs=[submit_btn, stop_btn])
