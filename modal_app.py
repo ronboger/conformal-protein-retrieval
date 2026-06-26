@@ -32,7 +32,12 @@ dataset_config_secret = modal.Secret.from_dict({"HF_DATASET_ID": HF_DATASET_ID})
 gpu_image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install(
-        "torch>=2.0.0",
+        # Pin to the cluster's known-good stack (torch 2.1 + cu121 + cudnn8) so the
+        # Modal A10G runtime matches the A5000 that hits ~35 ms/seq. A loose
+        # "torch>=2.0.0" was resolving to a newer build with a mismatched cuDNN,
+        # a suspected cause of the ~100 ms/seq gap (see scripts/modal_diagnose.py).
+        # The default PyPI torch==2.1.0 wheel ships cu121 + cudnn8.
+        "torch==2.1.0",
         "transformers>=4.30.0,<4.44.0",
         "sentencepiece",
         "protobuf",
@@ -146,6 +151,9 @@ def _check_volume_data():
     image=gpu_image,
     gpu="A10G",  # ~4x faster than T4 for the per-sequence T5 forwards (Syn3.0 = 149);
                  # scales to zero, so ~cost-neutral per search (faster offsets higher rate).
+    cpu=4,  # Tokenization + host->device copies are CPU-bound; the default ~1-2 vCPU
+            # share starves them and is a suspected cause of the Modal-vs-cluster
+            # embed gap (see scripts/modal_diagnose.py tokenize/h2d stages).
     timeout=600,
     # Snapshotting the ~11 GB fp32 ProtTrans model needs headroom or creation
     # OOM-kills (exit 137) and falls back to a slow full reload on every cold start.
