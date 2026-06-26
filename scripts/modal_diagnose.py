@@ -15,7 +15,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import modal
 from modal_app import gpu_image, volume, VOLUME_PATH, PVM_DIR, HF_CACHE
 
-app = modal.App("cpr-diagnose", image=gpu_image)
+# Modal 1.x no longer auto-mounts sibling local modules into the container, so the
+# top-level `from modal_app import ...` (above) would fail on import inside the
+# container. Explicitly add modal_app.py as a local Python source.
+app = modal.App("cpr-diagnose", image=gpu_image.add_local_python_source("modal_app"))
 
 
 @app.function(gpu="A10G", volumes={VOLUME_PATH: volume}, timeout=600)
