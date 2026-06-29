@@ -239,21 +239,30 @@ class Embedder:
             self.model_deep = self.model_deep.to(self.device)
 
     @modal.method()
-    def embed(self, sequences: list) -> list:
+    def embed(self, sequences: list, fp16_head: bool = False) -> list:
         """Embed protein sequences on GPU. Returns list of lists (JSON-safe).
 
         GPU-resident path: the T5 output stays on the GPU through embed_vec, instead
         of the per-sequence GPU->CPU->GPU round-trip inside
         utils_search.featurize_prottrans (which was written for single-protein
         convenience, not throughput). fp16 autocast on the large ProtTrans T5; the
-        small Protein-Vec head stays fp32 (its fp16 attention hits a cuDNN error).
-        Verified bit-identical to the original path -- see scripts/verify_gpu_resident.py.
+        Protein-Vec head stays fp32 by default (verified bit-identical, Syn3.0 59/149).
+
+        fp16_head=True (EXPERIMENTAL, opt-in via the UI's Advanced Options) also runs
+        the head in fp16 -- cuDNN SDPA excluded, since it raises "no execution plan"
+        under fp16 on the A10G. ~1.25x on the head, but can flip a borderline match
+        across the FDR threshold (Syn3.0 -> 60/149), so it is NOT the default and not
+        for paper reproduction.
         """
         import re
         import numpy as np
         import torch
+        from torch.nn.attention import sdpa_kernel, SDPBackend
 
         from utils_search import embed_vec  # PVM_DIR already on sys.path from load_models
+
+        # SDPA backends for the (opt-in) fp16 head: anything but cuDNN.
+        head_backends = [SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH]
 
         embeddings = []
         with torch.no_grad():
@@ -270,7 +279,11 @@ class Embedder:
                     hidden = self.model(input_ids=input_ids, attention_mask=attn).last_hidden_state
                 seq_len = int(attn[0].sum())
                 pt = hidden[0, : seq_len - 1].float().unsqueeze(0)  # stays on GPU
-                emb = embed_vec(pt, self.model_deep, self.masks, self.device)
+                if fp16_head:
+                    with torch.autocast("cuda", dtype=torch.float16), sdpa_kernel(head_backends):
+                        emb = embed_vec(pt, self.model_deep, self.masks, self.device)
+                else:
+                    emb = embed_vec(pt, self.model_deep, self.masks, self.device)
                 embeddings.append(np.asarray(emb, dtype=np.float32))
 
         result = np.concatenate(embeddings)
@@ -419,11 +432,14 @@ def ui():
                             # cold start would dominate); above, split across GPUs
     FANOUT_CHUNK = 400      # sequences per container when fanning out
 
-    def gpu_embed(sequences, progress=None):
+    def gpu_embed(sequences, progress=None, fp16_head=False):
         """Call Modal GPU function for protein embedding.
 
         Genome-scale inputs fan out across containers: split into chunks, embed in
         parallel, concatenate in order. Small inputs use a single container.
+
+        fp16_head (EXPERIMENTAL, opt-in) runs the Protein-Vec head in fp16 too -- see
+        Embedder.embed; can change borderline conformal results, so it's default off.
         """
         if progress:
             progress(0.1, desc="Sending sequences to GPU...")
@@ -437,7 +453,7 @@ def ui():
         try:
             # spawn() returns immediately, so all chunks run in parallel; get()
             # gathers them in submission (sequence) order.
-            futures = [embedder.embed.spawn(c) for c in chunks]
+            futures = [embedder.embed.spawn(c, fp16_head) for c in chunks]
             parts = [np.array(f.get(timeout=GPU_TIMEOUT), dtype=np.float32) for f in futures]
             arr = parts[0] if len(parts) == 1 else np.concatenate(parts)
         except TimeoutError:

@@ -140,7 +140,7 @@ class TestCleanSessionThreading:
 
         barrier = threading.Barrier(2)
 
-        def embed(seqs, progress=None):
+        def embed(seqs, progress=None, fp16_head=False):
             barrier.wait(timeout=15)  # force the two calls to interleave
             return np.repeat(clean_centroid_dir["embeddings"][:1], len(seqs), axis=0).astype(np.float32)
 
@@ -221,7 +221,7 @@ class TestProteinSearchSessionThreading:
     def test_returns_session_with_own_results(self):
         import protein_conformal.backend.gradio_interface as gi
 
-        def embed(seqs, progress=None):
+        def embed(seqs, progress=None, fp16_head=False):
             return np.ones((len(seqs), 512), dtype=np.float32)
 
         with patch.object(gi, "run_embed_protein_vec", side_effect=embed), \
@@ -239,7 +239,7 @@ class TestProteinSearchSessionThreading:
         """The result summary includes how long the search took."""
         import protein_conformal.backend.gradio_interface as gi
 
-        def embed(seqs, progress=None):
+        def embed(seqs, progress=None, fp16_head=False):
             return np.ones((len(seqs), 512), dtype=np.float32)
 
         with patch.object(gi, "run_embed_protein_vec", side_effect=embed), \
@@ -259,7 +259,7 @@ class TestProteinSearchSessionThreading:
 
         calls = {"n": 0}
 
-        def embed(seqs, progress=None):
+        def embed(seqs, progress=None, fp16_head=False):
             calls["n"] += 1
             return np.ones((len(seqs), 512), dtype=np.float32)
 
@@ -277,7 +277,7 @@ class TestProteinSearchSessionThreading:
 
         barrier = threading.Barrier(2)
 
-        def embed(seqs, progress=None):
+        def embed(seqs, progress=None, fp16_head=False):
             barrier.wait(timeout=15)
             return np.ones((len(seqs), 512), dtype=np.float32)
 
@@ -330,7 +330,7 @@ def test_match_sequence_truncated_in_display():
     full sequence (for the detail panel) and Query is left intact (for filtering)."""
     import protein_conformal.backend.gradio_interface as gi
 
-    def embed(seqs, progress=None):
+    def embed(seqs, progress=None, fp16_head=False):
         return np.ones((len(seqs), 512), dtype=np.float32)
 
     fasta = ">queryZ_MARK protein\nMVLSPADKTNVKAAWGKVGA\n"

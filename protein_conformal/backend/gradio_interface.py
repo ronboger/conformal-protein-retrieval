@@ -445,14 +445,17 @@ def process_uploaded_file(file_obj) -> Tuple[List[str], List[str]]:
         raise AttributeError("Uploaded FASTA file is not readable and has no accessible path.")
     return parse_fasta(fasta_text)
 
-def run_embed_protein_vec(sequences: List[str], progress=gr.Progress()) -> np.ndarray:
+def run_embed_protein_vec(sequences: List[str], progress=gr.Progress(), fp16_head: bool = False) -> np.ndarray:
     """
     use existing embed_protein_vec.py to generate embeddings
-    
+
     Args:
         sequences: List of protein sequences
         progress: Gradio progress bar
-        
+        fp16_head: EXPERIMENTAL opt-in fp16 Protein-Vec head. Honored by the Modal
+            GPU path (gpu_embed monkey-patches this function); ignored by this local
+            subprocess fallback.
+
     Returns:
         NumPy array of embeddings
     """
@@ -823,6 +826,7 @@ def process_input(input_text: str,
                   custom_metadata_upload: Optional[Any] = None,
                   match_type: str = "Exact",
                   min_probability: float = 0.5,
+                  fp16_head: bool = False,
                   session: Optional[dict] = None,
                   progress=gr.Progress()) -> Tuple[str, pd.DataFrame, dict]:
     """Wrapper that instruments the main pipeline with timing information.
@@ -851,6 +855,7 @@ def process_input(input_text: str,
             custom_metadata_upload,
             match_type,
             min_probability,
+            fp16_head,
             session,
             progress,
         )
@@ -878,6 +883,7 @@ def _process_input_impl(stage_timer: StageTimer,
                         custom_metadata_upload: Optional[Any] = None,
                         match_type: str = "Exact",
                         min_probability: float = 0.5,
+                        fp16_head: bool = False,
                         session: Optional[dict] = None,
                         progress=gr.Progress()) -> Tuple[Dict[str, Any], pd.DataFrame, dict]:
     """
@@ -944,6 +950,12 @@ def _process_input_impl(stage_timer: StageTimer,
 
     # ---- Caching: reuse embeddings and FAISS results across parameter changes ----
     input_hash = sequences_hash(sequences)
+    # fp16 head produces (slightly) different embeddings, so give it a distinct hash
+    # across ALL cache layers (session cache, EMBEDDING_CACHE, and the FAISS result
+    # cache key all derive from input_hash) -- else toggling it would serve stale
+    # fp32-head embeddings.
+    if fp16_head:
+        input_hash = f"{input_hash}:fp16head"
     cached = (session or {}).get("_cache", {})
     new_cache = cached  # preserved unless a fresh search overwrites it below
     embeddings = None
@@ -965,7 +977,7 @@ def _process_input_impl(stage_timer: StageTimer,
                 progress(0.6, desc="Using shared cached embeddings...")
             else:
                 with stage_timer.track("protein_vec_embedding"):
-                    embeddings = run_embed_protein_vec(sequences, progress)
+                    embeddings = run_embed_protein_vec(sequences, progress, fp16_head=fp16_head)
                 EMBEDDING_CACHE.put(emb_key, embeddings)
                 progress(0.6, desc="Embeddings complete!")
         except Exception as e:
@@ -1201,6 +1213,13 @@ def _process_input_impl(stage_timer: StageTimer,
             # Calibration failure warning
             if all_matches and all_matches[0].get("_calibration_failed"):
                 summary["calibration_warning"] = "Probability calibration unavailable. Probability columns show 0.000 and should be ignored."
+
+            # Experimental fp16 head note (opt-in via Advanced Options)
+            if fp16_head:
+                summary["fp16_head_note"] = (
+                    "EXPERIMENTAL fp16 Protein-Vec head ON: faster embedding, but may "
+                    "alter borderline matches (conformal guarantee not exact)."
+                )
 
             # Remove None values
             summary = {k: v for k, v in summary.items() if v is not None}
@@ -1559,6 +1578,13 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                                 visible=False,
                             )
 
+                            fp16_head_checkbox = gr.Checkbox(
+                                label="⚡ Experimental: fp16 Protein-Vec head",
+                                value=False,
+                                info="Faster embedding, but may alter borderline matches "
+                                     "(conformal guarantee not exact). GPU only.",
+                            )
+
                         lookup_db_state = gr.State(value=DEFAULT_LOOKUP_EMBEDDING)
                         metadata_db_state = gr.State(value=DEFAULT_LOOKUP_METADATA)
 
@@ -1827,7 +1853,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
         # Main prediction submission (dispatches between Protein Search and CLEAN)
         def on_submit(mode, fasta, upload, risk_t, risk_v, max_k, use_pv, custom_emb,
                       lookup, metadata, custom_lookup, custom_meta, m_type,
-                      min_prob, hide_unc, c_alpha, session):
+                      min_prob, hide_unc, c_alpha, fp16_head, session):
             _t0 = time.perf_counter()
             if mode == "Enzyme Classification (CLEAN)":
                 # CLEAN enzyme classification pipeline
@@ -1855,7 +1881,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 summary_json, df, session = process_input(
                     "", fasta, upload, "fasta_format", risk_t, risk_v, max_k,
                     use_pv, custom_emb, lookup, metadata, custom_lookup, custom_meta,
-                    m_type, min_prob, session=session,
+                    m_type, min_prob, fp16_head=fp16_head, session=session,
                 )
                 # Apply hide-uncharacterized filter
                 if hide_unc and not df.empty and "Protein Name(s)" in df.columns:
@@ -1900,6 +1926,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 lookup_db_state, metadata_db_state, custom_lookup_upload, custom_metadata_upload,
                 match_type, min_probability, hide_uncharacterized,
                 clean_alpha,
+                fp16_head_checkbox,
                 session_state,
             ],
             outputs=[search_timer_md, results_summary, results_table, query_filter, sequence_detail, prob_plot, session_state]
