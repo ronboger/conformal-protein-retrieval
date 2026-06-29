@@ -120,6 +120,18 @@ def _embed_protein_vec(sequences, device, args):
     if use_fp16:
         print("Fast mode: fp16 (half-precision) ProtTrans embedding")
 
+    # EXPERIMENTAL opt-in: also run the small Protein-Vec head in fp16. NOT used by
+    # the web app and NOT for paper reproduction -- although per-protein cosine is
+    # ~1.0, it can flip a borderline protein across the FDR threshold (Syn3.0 went
+    # 59 -> 60/149 in testing), changing the conformal result. Excludes the cuDNN
+    # SDPA backend, which raises "no execution plan" under fp16 on some GPUs (A10G).
+    use_fp16_head = _should_use_fp16(getattr(args, "fp16_head", False), device)
+    if use_fp16_head:
+        from torch.nn.attention import sdpa_kernel, SDPBackend
+        _head_backends = [SDPBackend.FLASH_ATTENTION, SDPBackend.EFFICIENT_ATTENTION, SDPBackend.MATH]
+        print("EXPERIMENTAL: fp16 Protein-Vec head enabled -- may change borderline conformal "
+              "results (Syn3.0 59->60/149 in testing); not for paper reproduction.")
+
     print(f"Embedding sequences {start_idx}..{len(sequences)}...")
     for i in range(start_idx, len(sequences)):
         seq = sequences[i]
@@ -131,7 +143,11 @@ def _embed_protein_vec(sequences, device, args):
             protrans_seq = featurize_prottrans([seq], model, tokenizer, device)
         if use_fp16:
             protrans_seq = protrans_seq.float()
-        emb = embed_vec(protrans_seq, model_deep, masks, device)
+        if use_fp16_head:
+            with torch.autocast("cuda", dtype=torch.float16), sdpa_kernel(_head_backends):
+                emb = embed_vec(protrans_seq, model_deep, masks, device)
+        else:
+            emb = embed_vec(protrans_seq, model_deep, masks, device)
         embeddings.append(emb)
         if (i + 1) % 10 == 0 or i == len(sequences) - 1:
             print(f"  Processed {i + 1}/{len(sequences)}")
@@ -679,6 +695,10 @@ def main():
     p_search.add_argument('--fast', action='store_true',
                           help='Fast mode: fp16 (half-precision) ProtTrans embedding on GPU '
                                'for FASTA input. Verified to preserve results; ignored on CPU.')
+    p_search.add_argument('--fp16-head', action='store_true',
+                          help='EXPERIMENTAL: also run the Protein-Vec head in fp16. Faster, but '
+                               'can flip a borderline match across the FDR threshold (Syn3.0 '
+                               '59->60/149 in testing). Not for paper reproduction; ignored on CPU.')
     p_search.add_argument('--calibration', '-c',
                           help='Calibration data for probabilities (default: data/pfam_new_proteins.npy)')
     # Threshold options (mutually exclusive)
@@ -706,6 +726,10 @@ def main():
     p_embed.add_argument('--fast', action='store_true',
                          help='Fast mode: fp16 (half-precision) ProtTrans embedding on GPU. '
                               'Verified to preserve results; ignored on CPU. (protein-vec only)')
+    p_embed.add_argument('--fp16-head', action='store_true',
+                         help='EXPERIMENTAL: also run the Protein-Vec head in fp16. Faster, but '
+                              'can flip a borderline match across the FDR threshold (Syn3.0 '
+                              '59->60/149 in testing). Not for paper reproduction; ignored on CPU.')
     p_embed.add_argument('--clean-model', default='split100',
                          help='CLEAN model variant (default: split100)')
     p_embed.set_defaults(func=cmd_embed)
