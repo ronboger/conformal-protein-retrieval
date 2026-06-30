@@ -222,3 +222,13 @@ notebooks_archive/
 scripts/archive/
 notebooks/*/archive/
 docs/archive/
+
+# Local macOS files
+.DS_Store
+
+# Local downloaded/generated lookup assets
+# Tracked files are unaffected; this keeps large local downloads out of status.
+data/**/*.npy
+data/**/*.tsv
+data/**/*.faissindex
+!data/sim2prob_lookup.csv

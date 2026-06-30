@@ -43,8 +43,8 @@ except Exception:
     DATAFRAME_SUPPORTS_STATIC_COLUMNS = False
 
 # Preferred display widths (in px) for default visible columns:
-# Query, UniProt Entry, Protein Name(s), Match Sequence, Pfam, Match Description, Exact Prob, Partial Prob
-RESULTS_TABLE_COLUMN_WIDTHS = [280, 120, 220, 210, 180, 220, 135, 135]
+# Query, UniProt Entry, Protein Name(s), Pfam, Exact Prob, Partial Prob
+RESULTS_TABLE_COLUMN_WIDTHS = [280, 120, 260, 180, 115, 115]
 
 # Hard char limits for long display columns (keyed by display header). Truncating
 # the data itself guarantees a cell can't blow up the row height when clicked —
@@ -224,6 +224,18 @@ DISPLAY_ROWS_PER_QUERY = 200
 # timeout (gpu_embed .get(timeout=...)); genome-scale jobs are routed to the CLI
 # (checkpointed, no timeout). Tunable; validated against the A10G embed rate.
 MAX_QUERY_SEQUENCES = 5000
+
+
+def _noop_progress(*args, **kwargs):
+    """No-op replacement for gr.Progress.
+
+    Gradio renders progress/status near multiple output components in this UI,
+    which made messages like "Embedding sequences..." appear all over the page.
+    Keep the internal calls harmless while relying on the Search/Stop button for
+    running state.
+    """
+    return None
+
 
 # Amino acid validation constants
 VALID_AA = set('ACDEFGHIKLMNPQRSTVWY')
@@ -445,7 +457,7 @@ def process_uploaded_file(file_obj) -> Tuple[List[str], List[str]]:
         raise AttributeError("Uploaded FASTA file is not readable and has no accessible path.")
     return parse_fasta(fasta_text)
 
-def run_embed_protein_vec(sequences: List[str], progress=gr.Progress(), fp16_head: bool = False) -> np.ndarray:
+def run_embed_protein_vec(sequences: List[str], progress=None, fp16_head: bool = False) -> np.ndarray:
     """
     use existing embed_protein_vec.py to generate embeddings
 
@@ -459,6 +471,7 @@ def run_embed_protein_vec(sequences: List[str], progress=gr.Progress(), fp16_hea
     Returns:
         NumPy array of embeddings
     """
+    if progress is None: progress = _noop_progress
     import subprocess
     import sys
     
@@ -473,7 +486,7 @@ def run_embed_protein_vec(sequences: List[str], progress=gr.Progress(), fp16_hea
         tmp_out_path = tmp_out.name
     
     try:
-        progress(0.2, desc="Running embed_protein_vec.py...")
+        progress(0.2, desc="Embedding sequences...")
         
         # Run the embed_protein_vec.py script
         cmd = [
@@ -490,11 +503,10 @@ def run_embed_protein_vec(sequences: List[str], progress=gr.Progress(), fp16_hea
         if result.returncode != 0:
             raise Exception(f"embed_protein_vec.py failed: {result.stderr}")
         
-        progress(0.8, desc="Loading embeddings...")
         # Load the embeddings
         embeddings = np.load(tmp_out_path)
         
-        progress(1.0, desc="Embeddings complete!")
+        progress(0.5, desc="Embedding complete. Searching database...")
         return embeddings
         
     finally:
@@ -504,8 +516,9 @@ def run_embed_protein_vec(sequences: List[str], progress=gr.Progress(), fp16_hea
         if os.path.exists(tmp_out_path):
             os.unlink(tmp_out_path)
 
-def run_embed_clean(sequences: List[str], progress=gr.Progress()) -> np.ndarray:
+def run_embed_clean(sequences: List[str], progress=None) -> np.ndarray:
     """Stub for CLEAN embedding (ESM-1b + LayerNormNet). Monkey-patched on Modal."""
+    if progress is None: progress = _noop_progress
     raise NotImplementedError(
         "CLEAN embedding requires GPU. Deploy with Modal or provide pre-computed embeddings."
     )
@@ -554,7 +567,7 @@ def process_clean_input(
     upload_file: Optional[Any],
     alpha_value: float,
     session: Optional[dict] = None,
-    progress=gr.Progress(),
+    progress=None,
 ) -> Tuple[str, pd.DataFrame, dict]:
     """Process input for CLEAN enzyme classification mode.
 
@@ -562,6 +575,7 @@ def process_clean_input(
     per-user state dict (carries results for export); it is threaded back into
     ``gr.State`` by ``on_submit`` rather than stored in a module global.
     """
+    if progress is None: progress = _noop_progress
     import json
 
     stage_timer = StageTimer()
@@ -755,7 +769,7 @@ def run_search(query_embeddings: np.ndarray,
                lookup_metadata_path: str = DEFAULT_LOOKUP_METADATA,
                threshold: float = 0.0,
                k: int = 1000,
-               progress=gr.Progress()) -> pd.DataFrame:
+               progress=None) -> pd.DataFrame:
     """
     Run protein search with a specified similarity threshold.
     
@@ -772,7 +786,8 @@ def run_search(query_embeddings: np.ndarray,
     Returns:
         DataFrame with search results matching repository format
     """
-    progress(0.1, desc="Preparing lookup database...")
+    if progress is None: progress = _noop_progress
+    progress(0.1, desc="Loading database...")
     resources = get_lookup_resources(lookup_embedding_path, lookup_metadata_path)
     lookup_database = resources["index"]
     lookup_seqs = resources["lookup_seqs"]
@@ -780,7 +795,7 @@ def run_search(query_embeddings: np.ndarray,
     metadata_kind = resources["metadata_kind"]
     max_neighbors = min(k, resources["num_embeddings"])
     
-    progress(0.7, desc="Running search...")
+    progress(0.7, desc="Searching database...")
     D, I = query(lookup_database, query_embeddings, max_neighbors)
     
     # Create results DataFrame matching repository output format
@@ -804,7 +819,7 @@ def run_search(query_embeddings: np.ndarray,
                 results.append(result)
     results = pd.DataFrame(results)
     
-    progress(1.0, desc="Search completed!")
+    progress(1.0, desc="Search complete!")
     return results
 
 
@@ -828,13 +843,14 @@ def process_input(input_text: str,
                   min_probability: float = 0.5,
                   fp16_head: bool = False,
                   session: Optional[dict] = None,
-                  progress=gr.Progress()) -> Tuple[str, pd.DataFrame, dict]:
+                  progress=None) -> Tuple[str, pd.DataFrame, dict]:
     """Wrapper that instruments the main pipeline with timing information.
 
     ``session`` carries this user's prior state (used for embedding/FAISS cache
     reuse); the updated session is returned and stored in ``gr.State`` by
     ``on_submit``.
     """
+    if progress is None: progress = _noop_progress
     stage_timer = StageTimer()
     t_start = time.perf_counter()
     try:
@@ -885,7 +901,7 @@ def _process_input_impl(stage_timer: StageTimer,
                         min_probability: float = 0.5,
                         fp16_head: bool = False,
                         session: Optional[dict] = None,
-                        progress=gr.Progress()) -> Tuple[Dict[str, Any], pd.DataFrame, dict]:
+                        progress=None) -> Tuple[Dict[str, Any], pd.DataFrame, dict]:
     """
     Process the input and generate predictions.
     
@@ -910,6 +926,7 @@ def _process_input_impl(stage_timer: StageTimer,
         - Table data (for the DataFrame display)
         - Complete results (for the raw JSON output)
     """
+    if progress is None: progress = _noop_progress
 
     # Ensure risk_value is numeric (Dropdown may return a string)
     risk_value = float(risk_value)
@@ -965,33 +982,27 @@ def _process_input_impl(stage_timer: StageTimer,
         embeddings = cached["embeddings"]
         sequences = cached["sequences"]
         query_meta = cached["query_meta"]
-        progress(0.5, desc="Using cached embeddings...")
         logger.info("Reusing cached embeddings for %d sequences", len(sequences))
     elif use_protein_vec and not custom_embeddings:
         try:
-            progress(0.1, desc="Starting embedding process...")
             emb_key = f"protein_vec:{input_hash}"
             embeddings = EMBEDDING_CACHE.get(emb_key)
             if embeddings is not None:
                 logger.info("Process-level embedding cache hit for %d sequences", len(sequences))
-                progress(0.6, desc="Using shared cached embeddings...")
             else:
                 with stage_timer.track("protein_vec_embedding"):
                     embeddings = run_embed_protein_vec(sequences, progress, fp16_head=fp16_head)
                 EMBEDDING_CACHE.put(emb_key, embeddings)
-                progress(0.6, desc="Embeddings complete!")
         except Exception as e:
             return {"error": f"Error generating embeddings: {str(e)}"}, pd.DataFrame(), (session or {})
     elif custom_embeddings:
         try:
-            progress(0.2, desc="Loading custom embeddings...")
             with stage_timer.track("load_custom_embeddings"):
                 with tempfile.NamedTemporaryFile(suffix='.npy', delete=False) as tmp:
                     tmp.write(custom_embeddings.read())
                     tmp_path = tmp.name
                 embeddings = np.load(tmp_path)
                 os.unlink(tmp_path)
-            progress(0.4, desc="Custom embeddings loaded!")
         except Exception as e:
             return {"error": f"Error loading embeddings: {str(e)}"}, pd.DataFrame(), (session or {})
     else:
@@ -1016,7 +1027,6 @@ def _process_input_impl(stage_timer: StageTimer,
 
         if is_prob_filter:
             # Probability Filter mode — no conformal threshold, filter by p0 after search
-            progress(0.5, desc="Searching database (probability filter mode)...")
             threshold = 0.0
             closest_alpha = None
             empirical_risk = None
@@ -1028,8 +1038,6 @@ def _process_input_impl(stage_timer: StageTimer,
                 "has_probability_calibration": True,
             }
         else:
-            progress(0.5, desc=f"Performing conformal prediction with {risk_type} control...")
-
             with stage_timer.track("threshold_lookup"):
                 if risk_type.lower() == "fdr":
                     fdr_file = "./results/fdr_thresholds_partial.csv" if is_partial else "./results/fdr_thresholds.csv"
@@ -1092,10 +1100,8 @@ def _process_input_impl(stage_timer: StageTimer,
         search_key = (input_hash, lookup_db, metadata_db, max_results)
         if cached.get("search_key") == search_key and cached.get("raw_matches") is not None:
             raw_matches = cached["raw_matches"]
-            progress(0.7, desc="Using cached search results...")
             logger.info("Reusing cached FAISS results (%d raw matches)", len(raw_matches))
         else:
-            progress(0.7, desc="Searching database...")
             with stage_timer.track("database_search"):
                 results_df = run_search(
                     embeddings,
@@ -1149,20 +1155,19 @@ def _process_input_impl(stage_timer: StageTimer,
         all_matches = [m for m in raw_matches if m["D_score"] >= sim_threshold]
 
         # Format probability display strings (p0/p1 already computed on raw_matches)
-        progress(0.8, desc="Formatting probabilities...")
         with stage_timer.track("probability_formatting"):
             for i, match in enumerate(all_matches):
                 p0_e = match.get("p0", 0)
                 p1_e = match.get("p1", 0)
                 mean_e = (p0_e + p1_e) / 2
                 half_e = abs(p1_e - p0_e) / 2
-                all_matches[i]["prob_exact"] = f"{mean_e:.3f} \u00b1 {half_e:.3f}"
+                all_matches[i]["prob_exact"] = f"{mean_e*100:.1f}% \u00b1 {half_e*100:.1f}%"
                 p0_p = match.get("p0_partial")
                 if p0_p is not None:
                     p1_p = match.get("p1_partial", 0)
                     mean_p = (p0_p + p1_p) / 2
                     half_p = abs(p1_p - p0_p) / 2
-                    all_matches[i]["prob_partial"] = f"{mean_p:.3f} \u00b1 {half_p:.3f}"
+                    all_matches[i]["prob_partial"] = f"{mean_p*100:.1f}% \u00b1 {half_p*100:.1f}%"
 
         # For Probability Filter mode, post-filter by p0 (conservative lower bound)
         if is_prob_filter:
@@ -1246,8 +1251,6 @@ def _process_input_impl(stage_timer: StageTimer,
                 "_cache": new_cache,
             }
 
-        progress(1.0, desc="Search complete!")
-
         # Format display DataFrame
         # Internal columns hidden from display: D_score, p0, p1, p0_partial, p1_partial, query_seq
         display_header_map = {
@@ -1265,13 +1268,11 @@ def _process_input_impl(stage_timer: StageTimer,
             "query_meta",
             "lookup_entry",
             "lookup_protein_names",
-            "lookup_seq",
             "lookup_pfam",
-            "lookup_meta",
             "prob_exact",
             "prob_partial",
         ]
-        HIDDEN_COLS = {"D_score", "p0", "p1", "p0_partial", "p1_partial", "query_seq"}
+        HIDDEN_COLS = {"D_score", "p0", "p1", "p0_partial", "p1_partial", "query_seq", "lookup_seq", "lookup_meta"}
         if not results_df.empty:
             display_columns = [col for col in preferred_order if col in results_df.columns
                                and col not in HIDDEN_COLS]
@@ -1297,10 +1298,10 @@ def export_current_results(format_type: str, session: dict) -> Tuple[str, Option
         format_type: Format to export (csv, json)
         
     Returns:
-        Tuple of (status JSON string, file path for download)
+        Tuple of (status message string, file path for download)
     """
     if not session or "results" not in session:
-        return json.dumps({"error": "No results to export"}, indent=2), None
+        return "❌ No results to export. Run a search first.", None
 
     try:
         # Create a directory for exported reports if it doesn't exist
@@ -1327,25 +1328,21 @@ def export_current_results(format_type: str, session: dict) -> Tuple[str, Option
                 df.to_csv(file_path, index=False)
                 total_exported = len(df)
             else:
-                return json.dumps({"error": "No matches to export"}, indent=2), None
+                return "❌ No matches to export.", None
         elif format_type == "json":
             with open(file_path, 'w') as f:
                 # For JSON export, we include the full result structure
                 json.dump(session["results"], f, indent=2, default=str)
                 total_exported = len(session["results"].get("matches", []))
         else:
-            return json.dumps({"error": f"Unsupported format: {format_type}"}, indent=2), None
+            return f"❌ Unsupported format: {format_type}", None
 
-        return json.dumps({
-            "success": True,
-            "message": f"Results exported as {file_path} ({total_exported} records)",
-            "file_path": file_path
-        }, indent=2), file_path
+        import os as _os
+        fname = _os.path.basename(file_path)
+        return f"✅ Exported {total_exported:,} records to `{fname}`", file_path
 
     except Exception as e:
-        return json.dumps({
-            "error": f"Error exporting results: {str(e)}"
-        }, indent=2), None
+        return f"❌ Error exporting results: {e}", None
 
 def export_embeddings(session: dict) -> Tuple[str, Optional[str]]:
     """Export cached query embeddings as a .npy file for reuse with the CLI."""
@@ -1353,7 +1350,7 @@ def export_embeddings(session: dict) -> Tuple[str, Optional[str]]:
     embeddings = cache.get("embeddings")
     query_meta = cache.get("query_meta")
     if embeddings is None:
-        return json.dumps({"error": "No embeddings available. Run a search first."}, indent=2), None
+        return "❌ No embeddings available. Run a search first.", None
 
     try:
         os.makedirs("exported_reports", exist_ok=True)
@@ -1364,17 +1361,179 @@ def export_embeddings(session: dict) -> Tuple[str, Optional[str]]:
         npy_path = os.path.join("exported_reports", f"query_embeddings_{timestamp}.npy")
         np.save(npy_path, embeddings)
 
-        msg = {
-            "success": True,
-            "message": f"Saved {n_seqs} embeddings ({dim}-dim) as {npy_path}",
-            "shape": [n_seqs, dim],
-            "note": "Order matches input FASTA. Use with: cpr search --query <this file>",
-        }
-        if query_meta:
-            msg["queries"] = [m[:60] + "..." if len(m) > 60 else m for m in query_meta]
-        return json.dumps(msg, indent=2), npy_path
+        import os as _os
+        fname = _os.path.basename(npy_path)
+        msg = f"✅ Saved {n_seqs} embeddings ({dim}-d) to `{fname}`"
+        msg += " — order matches input FASTA. Use with: `cpr search --query <this file>`"
+        return msg, npy_path
     except Exception as e:
-        return json.dumps({"error": f"Error saving embeddings: {e}"}, indent=2), None
+        return f"❌ Error saving embeddings: {e}", None
+
+
+def _format_summary_html(summary_json_str, elapsed_s=None):
+    """Turn a search-summary JSON string into a human-readable HTML block
+    with inline styles (immune to theme/CSS overrides).
+
+    Handles both Protein Search and CLEAN (Enzyme Classification) summaries,
+    plus error dicts.
+    """
+    _STYLE = ("background:#f7f5fb;color:#2d2440;padding:8px 14px;"
+              "border-radius:8px;border:1px solid #e6ddf5;font-size:14px;line-height:1.6;")
+    _EXTRA_STYLE = "font-size:13px;margin-top:6px;"
+
+    try:
+        s = json.loads(summary_json_str) if isinstance(summary_json_str, str) else summary_json_str
+    except (json.JSONDecodeError, TypeError):
+        s = summary_json_str if isinstance(summary_json_str, dict) else {}
+
+    def _esc(t):
+        return str(t).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    strong_style = 'color:#2d2440 !important;font-weight:700;'
+
+    # --- Error case ---
+    if isinstance(s, dict) and "error" in s:
+        return f'<div style="{_STYLE}"><strong style="{strong_style}">❌ Search failed</strong> — {_esc(s["error"])}</div>'
+
+    if not isinstance(s, dict):
+        return f'<div style="{_STYLE}">{_esc(s)}</div>' if s else ""
+
+    matches = s.get("matches_found", 0)
+    elapsed = elapsed_s if elapsed_s is not None else s.get("search_time_seconds")
+    time_str = f" · {elapsed:.1f}s" if elapsed else ""
+
+    # --- CLEAN (Enzyme Classification) ---
+    if s.get("mode") == "Enzyme Classification (CLEAN)":
+        hg = s.get("hierarchical_guarantee") or {}
+        alpha = hg.get("alpha")
+        meaning = hg.get("meaning", "")
+        line = f"<strong style=\"{strong_style}\">✅ {matches} EC prediction{'s' if matches != 1 else ''}</strong>"
+        detail_parts = []
+        if alpha is not None:
+            detail_parts.append(f"α={alpha}")
+        if meaning:
+            detail_parts.append(meaning.replace("Expected max hierarchical loss ", "loss ≤ ").replace("<=", "≤"))
+        if detail_parts:
+            line += " · " + " · ".join(detail_parts) + time_str
+        body = line
+        if s.get("warning"):
+            body += f'<div style="{_EXTRA_STYLE}">⚠️ {_esc(s["warning"])}</div>'
+        return f'<div style="{_STYLE}">{body}</div>'
+
+    # --- Protein Search ---
+    line = f"<strong style=\"{strong_style}\">✅ {matches:,} match{'es' if matches != 1 else ''}</strong>"
+
+    detail_parts = []
+    rc = s.get("risk_control")
+    sm = s.get("search_mode")
+    if rc:
+        rtype = rc.get("type", "")
+        alpha_used = rc.get("alpha_used")
+        if alpha_used is not None:
+            detail_parts.append(f"{rtype} α={alpha_used}")
+        else:
+            detail_parts.append(f"{rtype}")
+    elif sm:
+        min_p = sm.get("min_probability_p0")
+        if min_p is not None:
+            detail_parts.append(f"Probability ≥ {min_p:.2f}")
+        detail_parts.append(f"{sm.get('match_type', '')} match")
+
+    sc = s.get("search_config") or {}
+    db = sc.get("database", "")
+    mtype = sc.get("match_type", "")
+    max_k = sc.get("max_k")
+    if db:
+        detail_parts.append(db)
+    if mtype and not sm:
+        detail_parts.append(f"{mtype} match")
+    if max_k:
+        detail_parts.append(f"top {max_k:,} searched")
+
+    if detail_parts:
+        line += " · " + " · ".join(detail_parts) + time_str
+
+    body = line
+    for key, icon in [("display_note", "ℹ️"), ("warning", "⚠️"),
+                       ("calibration_warning", "⚠️"), ("fp16_head_note", "⚡")]:
+        val = s.get(key)
+        if val:
+            body += f'<div style="{_EXTRA_STYLE}">{icon} {_esc(val)}</div>'
+    return f'<div style="{_STYLE}">{body}</div>'
+
+
+def _format_export_html(status_str):
+    """Turn an export status string into a one-line HTML message with inline styles."""
+    _STYLE = ("background:#f7f5fb;color:#2d2440;padding:8px 14px;"
+              "border-radius:8px;border:1px solid #e6ddf5;font-size:14px;")
+
+    def _esc(t):
+        return str(t).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    if not status_str:
+        return ""
+    return f'<div style="{_STYLE}">{_esc(status_str)}</div>'
+
+
+def _setup_status_html():
+    """Render a compact readiness checklist for local search assets."""
+    import importlib.util
+
+    def _size(path):
+        if not os.path.exists(path):
+            return "missing"
+        size = os.path.getsize(path)
+        if size >= 1024**3:
+            return f"{size / 1024**3:.1f} GB"
+        if size >= 1024**2:
+            return f"{size / 1024**2:.0f} MB"
+        return f"{size / 1024:.0f} KB"
+
+    def _row(name, ok, detail):
+        color = "#1f7a3f" if ok else "#9a3412"
+        bg = "#eef7ee" if ok else "#fff6e5"
+        status = "ready" if ok else "needs setup"
+        return (
+            f'<div style="display:flex;justify-content:space-between;gap:12px;'
+            f'padding:8px 10px;border-radius:8px;background:{bg};margin:6px 0;">'
+            f'<span style="color:#2d2440;font-weight:600;">{name}</span>'
+            f'<span style="color:{color};">{status} · {detail}</span></div>'
+        )
+
+    lookup = DEFAULT_LOOKUP_EMBEDDING
+    metadata = DEFAULT_LOOKUP_METADATA
+    faiss_index = lookup[:-4] + ".faissindex" if lookup.endswith(".npy") else lookup + ".faissindex"
+    model_files = [
+        "protein_vec_models/protein_vec.ckpt",
+        "protein_vec_models/protein_vec_params.json",
+        "protein_vec_models/model_protein_moe.py",
+        "protein_vec_models/utils_search.py",
+        "protein_vec_models/model_protein_vec_single_variable.py",
+        "protein_vec_models/embed_structure_model.py",
+    ]
+    deps = ["sentencepiece", "google.protobuf", "pytorch_lightning", "h5py"]
+
+    rows = [
+        _row("Swiss-Prot embeddings", os.path.exists(lookup), _size(lookup)),
+        _row("Swiss-Prot metadata", os.path.exists(metadata), _size(metadata)),
+        _row("Prebuilt FAISS index", os.path.exists(faiss_index), _size(faiss_index)),
+        _row(
+            "Protein-Vec model files",
+            all(os.path.exists(p) for p in model_files),
+            f"{sum(os.path.exists(p) for p in model_files)}/{len(model_files)} files",
+        ),
+        _row(
+            "Python dependencies",
+            all(importlib.util.find_spec(d) is not None for d in deps),
+            ", ".join(d.split(".")[0] for d in deps),
+        ),
+    ]
+    return (
+        '<div style="font-size:0.93em;color:#2d2440;">'
+        '<div style="margin-bottom:6px;color:#555;">Local readiness for Protein Search.</div>'
+        + "".join(rows) +
+        '</div>'
+    )
 
 
 def create_interface():
@@ -1392,15 +1551,16 @@ def create_interface():
         font-family: 'Inter', sans-serif !important;
     }
 
-    /* Section headers (### headings) — blue gradient pill */
+    /* Section headers (### headings) — calm left-border accent, no gradient.
+       The brand purple gradient is reserved for the hero banner only. */
     .prose h3, .md h3 {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white !important;
-        padding: 10px 18px;
-        border-radius: 8px;
+        color: #2d2440 !important;
+        border-left: 4px solid #764ba2;
+        padding: 4px 0 4px 12px;
         margin: 16px 0 12px 0;
-        font-size: 1.1em;
+        font-size: 1.15em;
         font-weight: 600;
+        background: transparent !important;
     }
 
     /* Keep inline dataframe editor compact: no row blow-up on long cell values. */
@@ -1415,33 +1575,78 @@ def create_interface():
         height: 2.1em !important;
     }
 
+    /* De-brand: footer_links=[] removes the main Gradio footer at launch;
+       these rules catch any residual "Built with Gradio" chrome or API link. */
+    footer { display: none !important; }
+    a[href*="gradio.app"], a[href*="gradio.cc"] { display: none !important; }
+
+    /* Force dark text on the HTML wrapper containers themselves — Gradio's
+       theme can set color:white on the wrapper, making inline-styled content
+       invisible. This overrides the wrapper, and inline styles handle the rest. */
+    #search-summary, #export-status, #results-count {
+        color: #2d2440 !important;
+        background: transparent !important;
+    }
+    #search-summary div, #export-status div, #results-count div {
+        color: #2d2440 !important;
+    }
+
+    /* Monospace font for FASTA input — sequences are more readable in mono. */
+    #fasta-input textarea {
+        font-family: 'JetBrains Mono', 'Courier New', monospace !important;
+        font-size: 13px !important;
+    }
+
+    /* Single, compact home for the search progress overlay. */
+    #search-status {
+        margin-top: 8px !important;
+        min-height: 48px !important;
+        background: #f7f5fb !important;
+        border: 1px solid #e6ddf5 !important;
+        border-radius: 8px !important;
+        overflow: hidden !important;
+    }
+    #search-status, #search-status * {
+        color: #2d2440 !important;
+    }
+
     """
 
-    with gr.Blocks(title="Conformal Protein Retrieval", css=custom_css, theme=gr.themes.Soft()) as interface:
+    # Brand theme: purple/violet accents on the Soft base so every control
+    # (primary buttons, sliders, focus rings, selected tabs) matches the hero
+    # gradient instead of defaulting to Gradio's stock blue.
+    brand_theme = gr.themes.Soft(
+        primary_hue="purple",
+        secondary_hue="violet",
+        neutral_hue="slate",
+        font=[gr.themes.GoogleFont("Inter"), "ui-sans-serif", "system-ui"],
+        font_mono=[gr.themes.GoogleFont("JetBrains Mono"), "ui-monospace", "monospace"],
+    )
+
+    with gr.Blocks(title="Conformal Protein Retrieval", analytics_enabled=False) as interface:
         # Per-user session state — threaded through process_input/process_clean_input
         # so concurrent users never share results (no module-global session).
         session_state = gr.State({})
 
-        # Header
+        # Header — compact hero. The purple gradient lives here only.
         gr.HTML("""
-        <div style="text-align: center; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; margin-bottom: 20px;">
-            <h1 style="color: white; font-size: 2.2em; margin-bottom: 5px;">Conformal Protein Retrieval</h1>
-            <p style="color: rgba(255,255,255,0.9); font-size: 1.1em; margin: 0;">
+        <div style="text-align: center; padding: 14px 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; margin-bottom: 14px;">
+            <h1 style="color: white; font-size: 1.8em; margin: 0 0 4px 0;">Conformal Protein Retrieval</h1>
+            <p style="color: rgba(255,255,255,0.92); font-size: 1em; margin: 0;">
                 Functional protein mining with statistical guarantees
-            </p>
-            <p style="color: rgba(255,255,255,0.7); font-size: 0.9em; margin-top: 5px;">
-                Based on <a href="https://www.nature.com/articles/s41467-024-55676-y" target="_blank" style="color: #fff;">Boger et al., Nature Communications 2025</a>
+                &nbsp;·&nbsp;
+                <a href="https://www.nature.com/articles/s41467-024-55676-y" target="_blank" style="color: rgba(255,255,255,0.85); text-decoration: underline;">Boger et al., Nature Communications 2025</a>
             </p>
         </div>
         """)
 
-        # Quick info box
-        gr.HTML("""
-        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 14px 18px; margin: 10px 0; border-radius: 8px; color: white;">
-            <strong>How it works:</strong> Enter protein sequences in FASTA format, choose FDR or FNR risk control,
-            and retrieve functionally similar proteins from Swiss-Prot (540K), AFDB (clustered AlphaFold DB), or a custom database with provable error-rate guarantees.
-        </div>
-        """)
+        # "How it works" — collapsible so it doesn't push inputs below the fold.
+        with gr.Accordion("How it works", open=False):
+            gr.Markdown(
+                "Enter protein sequences in **FASTA** format, choose **FDR** or **FNR** risk control, "
+                "and retrieve functionally similar proteins from Swiss-Prot (540K), AFDB (clustered "
+                "AlphaFold DB), or a custom database — with provable error-rate guarantees."
+            )
 
         # Main interface with tabs
         with gr.Tabs():
@@ -1454,6 +1659,7 @@ def create_interface():
                         fasta_text = gr.TextArea(
                             lines=8,
                             label="FASTA Content",
+                            elem_id="fasta-input",
                             value=""">sp|Q99ZW2|CAS9_STRP1 CRISPR-associated endonuclease Cas9 OS=Streptococcus pyogenes serotype M1 GN=cas9
 MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRICYLQEIFSNEMAKVDDSFFHRLEESFLVEEDKKHERHPIFGNIVDEVAYHEKYPTIYHLRKKLVDSTDKADLRLIYLALAHMIKFRGHFLIEGDLNPDNSDVDKLFIQLVQTYNQLFEENPINASGVDAKAILSARLSKSRRLENLIAQLPGEKKNGLFGNLIALSLGLTPNFKSNFDLAEDAKLQLSKDTYDDDLDNLLAQIGDQYADLFLAAKNLSDAILLSDILRVNTEITKAPLSASMIKRYDEHHQDLTLLKALVRQQLPEKYKEIFFDQSKNGYAGYIDGGASQEEFYKFIKPILEKMDGTEELLVKLNREDLLRKQRTFDNGSIPHQIHLGELHAILRRQEDFYPFLKDNREKIEKILTFRIPYYVGPLARGNSRFAWMTRKSEETITPWNFEEVVDKGASAQSFIERMTNFDKNLPNEKVLPKHSLLYEYFTVYNELTKVKYVTEGMRKPAFLSGEQKKAIVDLLFKTNRKVTVKQLKEDYFKKIECFDSVEISGVEDRFNASLGTYHDLLKIIKDKDFLDNEENEDILEDIVLTLTLFEDREMIEERLKTYAHLFDDKVMKQLKRRRYTGWGRLSRKLINGIRDKQSGKTILDFLKSDGFANRNFMQLIHDDSLTFKEDIQKAQVSGQGDSLHEHIANLAGSPAIKKGILQTVKVVDELVKVMGRHKPENIVIEMARENQTTQKGQKNSRERMKRIEEGIKELGSQILKEHPVENTQLQNEKLYLYYLQNGRDMYVDQELDINRLSDYDVDHIVPQSFLKDDSIDNKVLTRSDKNRGKSDNVPSEEVVKKMKNYWRQLLNAKLITQRKFDNLTKAERGGLSELDKAGFIKRQLVETRQITKHVAQILDSRMNTKYDENDKLIREVKVITLKSKLVSDFRKDFQFYKVREINNYHHAHDAYLNAVVGTALIKKYPKLESEFVYGDYKVYDVRKMIAKSEQEIGKATAKYFFYSNIMNFFKTEITLANGEIRKRPLIETNGETGEIVWDKGRDFATVRKVLSMPQVNIVKKTEVQTGGFSKESILPKRNSDKLIARKKDWDPKKYGGFDSPTVAYSVLVVAKVEKGKSKKLKSVKELLGITIMERSSFEKNPIDFLEAKGYKEVKKDLIIKLPKYSLFELENGRKRMLASAGELQKGNELALPSKYVNFLYLASHYEKLKGSPEDNEQKQLFVEQHKHYLDEIIEQISEFSKRVILADANLDKVLSAYNKHRDKPIREQAENIIHLFTLTNLGAPAAFKYFDTTIDRKRYTSTKEVLDATLIHQSITGLYETRIDLSQLGGD""",
                         )
@@ -1466,11 +1672,11 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                         # Example buttons
                         gr.Markdown("**Quick Examples:**")
                         with gr.Row():
-                            example_btn_cas9 = gr.Button("Cas9", size="sm")
-                            example_btn_reca = gr.Button("RecA", size="sm")
-                            example_btn_cox1 = gr.Button("CoxA", size="sm")
-                            example_btn_insulin = gr.Button("Insulin", size="sm")
-                            example_btn_syn30 = gr.Button("Syn3.0", size="sm")
+                            example_btn_cas9 = gr.Button("Cas9", size="sm", elem_id="example-cas9")
+                            example_btn_reca = gr.Button("RecA", size="sm", elem_id="example-reca")
+                            example_btn_cox1 = gr.Button("CoxA", size="sm", elem_id="example-coxa")
+                            example_btn_insulin = gr.Button("Insulin", size="sm", elem_id="example-insulin")
+                            example_btn_syn30 = gr.Button("Syn3.0", size="sm", elem_id="example-syn30")
 
                         use_protein_vec = gr.State(value=True)
                         custom_embeddings_state = gr.State(value=None)
@@ -1579,22 +1785,41 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                             )
 
                             fp16_head_checkbox = gr.Checkbox(
-                                label="⚡ Experimental: fp16 Protein-Vec head",
+                                label="Experimental: fp16 Protein-Vec head",
                                 value=False,
                                 info="Faster embedding, but may alter borderline matches "
                                      "(conformal guarantee not exact). GPU only.",
                             )
 
+                            with gr.Accordion("Setup readiness", open=False):
+                                gr.HTML(_setup_status_html())
+
                         lookup_db_state = gr.State(value=DEFAULT_LOOKUP_EMBEDDING)
                         metadata_db_state = gr.State(value=DEFAULT_LOOKUP_METADATA)
 
-                        # Submit button. Stop replaces it (same spot) only while a
-                        # search is running -> no extra real estate. Wired below.
-                        submit_btn = gr.Button("Search", variant="primary", size="lg")
-                        stop_btn = gr.Button("⏹ Stop", variant="stop", size="lg", visible=False)
+                        with gr.Row():
+                            submit_btn = gr.Button("Search", variant="primary", size="lg", scale=3)
+                            stop_btn = gr.Button("⏹ Stop", variant="stop", size="lg", visible=False, scale=3)
+                            clear_btn = gr.Button("Clear", size="sm", variant="secondary", scale=1)
+                        search_status = gr.HTML("", visible=False, elem_id="search-status")
+                        gr.HTML(
+                            '<div style="color:#666;font-size:0.88em;margin-top:6px;line-height:1.4;">'
+                            'Repeat searches are cached: changing FDR/FNR or match type reuses embeddings and database hits when possible. '
+                            'Changing the FASTA input or database reruns the expensive steps.'
+                            '</div>'
+                        )
 
                 # Results section
                 gr.Markdown("### Results")
+
+                with gr.Accordion("How to interpret results", open=False):
+                    gr.Markdown("""
+                    - **Exact Prob** estimates the probability that the matched protein has the same Pfam domain set as the query.
+                    - **Partial Prob** estimates the probability that at least one Pfam domain overlaps.
+                    - **FDR α** controls the expected fraction of false discoveries among returned hits.
+                    - **FNR α** favors recall by controlling missed true matches.
+                    - The table is capped for readability; **Export Results** includes the full match set.
+                    """)
 
                 with gr.Row():
                     query_filter = gr.Dropdown(
@@ -1605,10 +1830,19 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                         scale=3,
                     )
 
+                results_count_md = gr.HTML("", elem_id="results-count")
+
+                # Empty-state placeholder — shown until the first search completes.
+                empty_state = gr.HTML(
+                    '<div style="text-align:center;padding:40px 20px;color:#999;font-size:1.1em;">'
+                    'Run a search to see matched proteins</div>',
+                    visible=True,
+                )
+
                 with gr.Row():
                     with gr.Column(scale=2):
                         results_table_kwargs = {
-                            "label": "Matches (click a cell to expand, click a row for full details)",
+                            "label": "Matches",
                             "wrap": False,
                             "interactive": True,
                             "elem_id": "results-table",
@@ -1630,8 +1864,7 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                             visible=False,
                         )
 
-                        search_timer_md = gr.Markdown("")
-                        results_summary = gr.Code(language="json", label="Search Summary", interactive=False)
+                        results_summary = gr.HTML("", elem_id="search-summary")
 
                         with gr.Row():
                             export_format = gr.Radio(
@@ -1643,51 +1876,59 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                             export_btn = gr.Button("Export Results", size="sm", scale=1)
                             save_emb_btn = gr.Button("Save Embeddings (.npy)", size="sm", scale=1)
 
-                        export_status = gr.Code(language="json", label="Export Status", interactive=False)
+                        export_status = gr.HTML("", elem_id="export-status")
                         export_download = gr.File(label="Download", interactive=False)
 
-                prob_plot = gr.Plot(
-                    label="Match Probability vs. Ordered Hit Rank (1 = top hit)",
-                    visible=False,
-                )
+                with gr.Accordion("Diagnostics: probability vs rank", open=False):
+                    prob_plot = gr.Plot(
+                        label="Match Probability vs. Ordered Hit Rank (1 = top hit)",
+                        visible=False,
+                    )
 
             with gr.TabItem("About"):
+                gr.HTML("""
+                <div style="max-width:960px;margin:0 auto;color:#2d2440;">
+                  <h2 style="margin-bottom:6px;">Conformal Protein Retrieval</h2>
+                  <p style="font-size:1.05em;color:#555;margin-top:0;">
+                    Functional protein mining with calibrated probabilities and conformal error-rate guarantees.
+                  </p>
+
+                  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin:18px 0;">
+                    <div style="background:#f7f5fb;border:1px solid #e6ddf5;border-radius:10px;padding:16px;">
+                      <h3 style="margin-top:0;color:#2d2440;">Protein Search</h3>
+                      <p>Find functionally similar proteins from Swiss-Prot, SCOPE, AFDB, Eukaryotic, or custom databases.</p>
+                      <p><strong>Controls:</strong> FDR, FNR, or direct probability filtering.</p>
+                    </div>
+                    <div style="background:#f7f5fb;border:1px solid #e6ddf5;border-radius:10px;padding:16px;">
+                      <h3 style="margin-top:0;color:#2d2440;">Enzyme Classification</h3>
+                      <p>Predict EC numbers using CLEAN-style embeddings and hierarchical conformal guarantees.</p>
+                      <p><strong>Controls:</strong> maximum hierarchical loss α.</p>
+                    </div>
+                  </div>
+
+                  <div style="background:white;border:1px solid #eee;border-radius:10px;padding:16px;margin:18px 0;">
+                    <h3 style="margin-top:0;color:#2d2440;">Pipeline</h3>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;color:#555;">
+                      <span style="background:#f7f5fb;padding:8px 10px;border-radius:8px;">FASTA</span>
+                      <span>→</span>
+                      <span style="background:#f7f5fb;padding:8px 10px;border-radius:8px;">Embedding</span>
+                      <span>→</span>
+                      <span style="background:#f7f5fb;padding:8px 10px;border-radius:8px;">FAISS search</span>
+                      <span>→</span>
+                      <span style="background:#f7f5fb;padding:8px 10px;border-radius:8px;">Conformal filtering</span>
+                      <span>→</span>
+                      <span style="background:#f7f5fb;padding:8px 10px;border-radius:8px;">Ranked results</span>
+                    </div>
+                  </div>
+
+                  <div style="display:flex;gap:10px;flex-wrap:wrap;margin:18px 0;">
+                    <div style="background:#eef7ee;border:1px solid #cfe8cf;border-radius:999px;padding:8px 12px;">Syn3.0: 59/149 genes annotated</div>
+                    <div style="background:#eef3ff;border:1px solid #d3dcff;border-radius:999px;padding:8px 12px;">Swiss-Prot: 540K lookup proteins</div>
+                    <div style="background:#fff6e5;border:1px solid #ffe1a8;border-radius:999px;padding:8px 12px;">Protein-Vec: 512-d embeddings</div>
+                  </div>
+                </div>
+                """)
                 gr.Markdown("""
-                ## Conformal Protein Retrieval
-
-                This tool provides two analysis modes with **provable statistical guarantees**
-                using conformal prediction:
-
-                ### Mode 1: Protein Search (Protein-Vec)
-
-                Search for functionally similar proteins from Swiss-Prot (540K), AFDB (clustered AlphaFold DB),
-                or a custom database with FDR/FNR control.
-
-                | Type | Controls | Use When |
-                |------|----------|----------|
-                | **FDR** (α) | False discoveries among retrieved matches | You need high precision — most results should be correct |
-                | **FNR** (α) | Missed true matches among all real matches | You need high recall — don't miss true homologs |
-
-                **Pipeline**: Protein-Vec (ProtTrans T5 + MoE) → 512-d → FAISS cosine → conformal threshold → Venn-Abers probabilities
-
-                ### Mode 2: Enzyme Classification (CLEAN)
-
-                Predict EC (Enzyme Commission) numbers for query proteins with hierarchical conformal guarantees.
-
-                | Alpha | Max Hierarchical Loss | Guarantee |
-                |-------|----------------------|-----------|
-                | α=0.5 | ≤ 0.5 | Near-exact EC match |
-                | α=1.0 | ≤ 1 | Same sub-subclass (4th digit may differ) |
-                | α=2.0 | ≤ 2 | Same subclass (3rd digit may differ) |
-                | α=3.0 | ≤ 3 | Same class (2nd digit may differ) |
-
-                **Pipeline**: ESM-1b → CLEAN LayerNormNet → 128-d → FAISS L2 → hierarchical conformal threshold
-
-                ### Key Results
-
-                - **Syn3.0**: Annotated **59/149 (39.6%)** genes of unknown function at FDR α = 0.1
-                - **CLEAN**: Hierarchical loss controlled at family level (α=1.0) across 392 test enzymes
-
                 ### Citation
 
                 ```bibtex
@@ -1758,16 +1999,26 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
         upload_file.upload(fn=load_uploaded_fasta, inputs=[upload_file], outputs=[fasta_text])
 
         # Export functionality
+        def _do_export(fmt, session):
+            status, path = export_current_results(fmt, session)
+            return _format_export_html(status), path
+
+        def _do_save_emb(session):
+            status, path = export_embeddings(session)
+            return _format_export_html(status), path
+
         export_btn.click(
-            fn=export_current_results,
+            fn=_do_export,
             inputs=[export_format, session_state],
-            outputs=[export_status, export_download]
+            outputs=[export_status, export_download],
+            show_progress="hidden",
         )
 
         save_emb_btn.click(
-            fn=export_embeddings,
+            fn=_do_save_emb,
             inputs=[session_state],
-            outputs=[export_status, export_download]
+            outputs=[export_status, export_download],
+            show_progress="hidden",
         )
 
         # --- Probability vs. rank plot helper ---
@@ -1853,12 +2104,14 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
         # Main prediction submission (dispatches between Protein Search and CLEAN)
         def on_submit(mode, fasta, upload, risk_t, risk_v, max_k, use_pv, custom_emb,
                       lookup, metadata, custom_lookup, custom_meta, m_type,
-                      min_prob, hide_unc, c_alpha, fp16_head, session):
+                      min_prob, hide_unc, c_alpha, fp16_head, session,
+                      progress=gr.Progress()):
             _t0 = time.perf_counter()
             if mode == "Enzyme Classification (CLEAN)":
                 # CLEAN enzyme classification pipeline
                 summary_json, df, session = process_clean_input(
                     fasta, upload, float(c_alpha), session=session,
+                    progress=progress,
                 )
                 # Build per-query dropdown
                 if not df.empty and "Query" in df.columns:
@@ -1867,14 +2120,17 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 else:
                     unique_queries = []
                     choices = ["All queries"]
+                count_html = (f'<div style="color:#666;font-size:0.9em;padding:2px 4px;">'
+                              f'Showing {len(df)} result{"s" if len(df) != 1 else ""}</div>') if not df.empty else ""
                 return (
-                    f"**⏱ Search completed in {time.perf_counter() - _t0:.1f}s**",
-                    summary_json,
+                    _format_summary_html(summary_json, time.perf_counter() - _t0),
                     df,
                     gr.Dropdown(choices=choices, value=unique_queries[0] if unique_queries else "All queries"),
                     gr.Code(visible=False, value=""),
                     gr.Plot(visible=False),  # No prob plot for CLEAN
                     session,
+                    count_html,
+                    gr.HTML(visible=False),  # hide empty state
                 )
             else:
                 # Protein Search pipeline
@@ -1882,6 +2138,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                     "", fasta, upload, "fasta_format", risk_t, risk_v, max_k,
                     use_pv, custom_emb, lookup, metadata, custom_lookup, custom_meta,
                     m_type, min_prob, fp16_head=fp16_head, session=session,
+                    progress=progress,
                 )
                 # Apply hide-uncharacterized filter
                 if hide_unc and not df.empty and "Protein Name(s)" in df.columns:
@@ -1896,26 +2153,47 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 # Build probability vs. rank plot for the first query
                 plot_label = unique_queries[0] if unique_queries else None
                 fig = _build_prob_plot(session, query_label=plot_label)
+                # "Showing N of M" indicator
+                total = (session or {}).get("results", {}).get("summary", {}).get("matches_found", 0)
+                shown = len(df)
+                if shown and total and shown < total:
+                    count_html = (f'<div style="color:#666;font-size:0.9em;padding:2px 4px;">'
+                                  f'Showing <strong style="color:#444 !important;font-weight:700;">{shown:,}</strong> of '
+                                  f'<strong style="color:#444 !important;font-weight:700;">{total:,}</strong> matches in the table below</div>')
+                elif shown:
+                    count_html = (f'<div style="color:#666;font-size:0.9em;padding:2px 4px;">'
+                                  f'<strong style="color:#444 !important;font-weight:700;">{shown:,}</strong> match{"es" if shown != 1 else ""}</div>')
+                else:
+                    count_html = ""
                 return (
-                    f"**⏱ Search completed in {time.perf_counter() - _t0:.1f}s**",
-                    summary_json,
+                    _format_summary_html(summary_json, time.perf_counter() - _t0),
                     df,
                     gr.Dropdown(choices=choices, value=unique_queries[0] if unique_queries else "All queries"),
                     gr.Code(visible=False, value=""),
                     gr.Plot(value=fig, visible=fig is not None),
                     session,
+                    count_html,
+                    gr.HTML(visible=False),  # hide empty state
                 )
 
         # Toggle Search <-> Stop around the search so Stop occupies Search's spot
         # only while running (no extra real estate).
         def _searching():
-            return gr.update(visible=False), gr.update(visible=True)
+            # Empty card: Gradio's progress text/bar is targeted here via show_progress_on.
+            return (
+                gr.update(visible=False),
+                gr.update(visible=True),
+                gr.update(value='<div style="min-height:48px;"></div>', visible=True),
+            )
 
         def _idle():
-            return gr.update(visible=True), gr.update(visible=False)
+            return gr.update(visible=True), gr.update(visible=False), gr.update(value="", visible=False)
 
         search_event = submit_btn.click(
-            fn=_searching, inputs=None, outputs=[submit_btn, stop_btn]
+            fn=_searching,
+            inputs=None,
+            outputs=[submit_btn, stop_btn, search_status],
+            show_progress="hidden",
         ).then(
             fn=on_submit,
             inputs=[
@@ -1929,20 +2207,52 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 fp16_head_checkbox,
                 session_state,
             ],
-            outputs=[search_timer_md, results_summary, results_table, query_filter, sequence_detail, prob_plot, session_state]
+            outputs=[results_summary, results_table, query_filter, sequence_detail, prob_plot, session_state, results_count_md, empty_state],
+            show_progress="full",
+            show_progress_on=[search_status],
         )
         # Revert to Search when the search finishes normally.
-        search_event.then(fn=_idle, inputs=None, outputs=[submit_btn, stop_btn])
+        search_event.then(fn=_idle, inputs=None, outputs=[submit_btn, stop_btn, search_status], show_progress="hidden")
         # Stop: revert the button and cancel the in-flight search event.
-        stop_btn.click(fn=_idle, inputs=None, outputs=[submit_btn, stop_btn], cancels=[search_event])
+        stop_btn.click(fn=_idle, inputs=None, outputs=[submit_btn, stop_btn, search_status], cancels=[search_event], show_progress="hidden")
+
+        # Clear button — reset input and results to initial state.
+        def _clear():
+            return (
+                "",  # fasta_text
+                None,  # upload_file
+                pd.DataFrame(),  # results_table
+                gr.Dropdown(choices=["All queries"], value="All queries"),  # query_filter
+                gr.HTML(""),  # results_summary
+                gr.Code(visible=False, value=""),  # sequence_detail
+                gr.Plot(visible=False),  # prob_plot
+                {},  # session_state
+                gr.HTML(""),  # results_count_md
+                gr.HTML(
+                    '<div style="text-align:center;padding:40px 20px;color:#999;font-size:1.1em;">'
+                    'Run a search to see matched proteins</div>',
+                    visible=True,
+                ),  # empty_state
+                gr.update(value="", visible=False),  # search_status
+            )
+
+        clear_btn.click(
+            fn=_clear,
+            inputs=None,
+            outputs=[fasta_text, upload_file, results_table, query_filter,
+                     results_summary, sequence_detail, prob_plot,
+                     session_state, results_count_md, empty_state, search_status],
+            show_progress="hidden",
+        )
+
 
         # Per-query filtering
         def filter_by_query(query_choice, session):
             if not session or "results" not in session:
-                return pd.DataFrame(), gr.Code(visible=False, value=""), gr.Plot(visible=False)
+                return pd.DataFrame(), gr.Code(visible=False, value=""), gr.Plot(visible=False), ""
             matches = session["results"].get("matches", [])
             if not matches:
-                return pd.DataFrame(), gr.Code(visible=False, value=""), gr.Plot(visible=False)
+                return pd.DataFrame(), gr.Code(visible=False, value=""), gr.Plot(visible=False), ""
 
             # Filter matches for the selected query
             if query_choice and query_choice != "All queries":
@@ -1965,10 +2275,9 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
             }
             preferred_order = [
                 "query_meta", "lookup_entry", "lookup_protein_names",
-                "lookup_seq", "lookup_pfam", "lookup_meta",
-                "prob_exact", "prob_partial",
+                "lookup_pfam", "prob_exact", "prob_partial",
             ]
-            HIDDEN_COLS = {"D_score", "p0", "p1", "p0_partial", "p1_partial", "query_seq"}
+            HIDDEN_COLS = {"D_score", "p0", "p1", "p0_partial", "p1_partial", "query_seq", "lookup_seq", "lookup_meta"}
             display_columns = [col for col in preferred_order if col in df.columns
                                and col not in HIDDEN_COLS]
             display_columns.extend([col for col in df.columns if col not in display_columns
@@ -1980,16 +2289,30 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
             # Build probability plot for the filtered query
             plot_label = query_choice if query_choice and query_choice != "All queries" else None
             fig = _build_prob_plot(session, query_label=plot_label)
+            # "Showing N of M" for the filtered view
+            total = len(matches)
+            shown = len(display_df)
+            if shown and total and shown < total:
+                count_md = (f'<div style="color:#666;font-size:0.9em;padding:2px 4px;">'
+                            f'Showing <strong style="color:#444 !important;font-weight:700;">{shown:,}</strong> of '
+                            f'<strong style="color:#444 !important;font-weight:700;">{total:,}</strong> matches in the table below</div>')
+            elif shown:
+                count_md = (f'<div style="color:#666;font-size:0.9em;padding:2px 4px;">'
+                            f'<strong style="color:#444 !important;font-weight:700;">{shown:,}</strong> match{"es" if shown != 1 else ""}</div>')
+            else:
+                count_md = ""
             return (
                 display_df,
                 gr.Code(visible=False, value=""),
                 gr.Plot(value=fig, visible=fig is not None),
+                count_md,
             )
 
         query_filter.change(
             fn=filter_by_query,
             inputs=[query_filter, session_state],
-            outputs=[results_table, sequence_detail, prob_plot],
+            outputs=[results_table, sequence_detail, prob_plot, results_count_md],
+            show_progress="hidden",
         )
 
         display_to_match_key = {
@@ -2216,8 +2539,17 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
             outputs=[risk_value, min_probability]
         )
     
+    # Gradio 6 expects theme/css to be passed at launch(), not Blocks().
+    # Attach them so the launcher can pass them without create_interface()
+    # returning a custom tuple.
+    interface.cpr_theme = brand_theme
+    interface.cpr_css = custom_css
     return interface
 
 if __name__ == "__main__":
     interface = create_interface()
-    interface.launch(share=False)
+    interface.launch(
+        share=False,
+        theme=getattr(interface, "cpr_theme", None),
+        css=getattr(interface, "cpr_css", None),
+    )
