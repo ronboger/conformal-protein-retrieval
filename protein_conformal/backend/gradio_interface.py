@@ -336,7 +336,15 @@ def _load_lookup_metadata(metadata_path: str) -> Tuple[str, List[str], List[Any]
         if "Sequence" not in df.columns:
             raise KeyError(f"Metadata TSV missing 'Sequence' column: {metadata_path}")
         sequences = df["Sequence"].astype(str).tolist()
-        metadata_columns = [col for col in ["Entry", "Pfam", "Protein names"] if col in df.columns]
+        # Preserve a compact, useful subset of metadata across databases. Swiss-Prot
+        # has curated annotations; AFDB may only have Entry; Euk has organism/name.
+        # Avoid storing every TSV column (GO fields are huge in Swiss-Prot).
+        useful_columns = [
+            "Entry", "Entry Name", "Protein names", "Organism", "Pfam", "EC number",
+            "Description", "Name", "Accession", "TaxID", "Source", "Sample",
+            "Contig", "Protein ID", "Annotation",
+        ]
+        metadata_columns = [col for col in useful_columns if col in df.columns]
         if metadata_columns:
             lookup_meta: List[Any] = (
                 df[metadata_columns]
@@ -349,6 +357,98 @@ def _load_lookup_metadata(metadata_path: str) -> Tuple[str, List[str], List[Any]
     else:
         sequences, lookup_meta = read_fasta(metadata_path)
         return "fasta", sequences, lookup_meta
+
+
+def _meta_get(meta_row: Any, *keys: str) -> str:
+    """Case-insensitive lookup for a metadata dict value."""
+    if not isinstance(meta_row, dict):
+        return ""
+    lower = {str(k).lower(): v for k, v in meta_row.items()}
+    for key in keys:
+        val = lower.get(key.lower())
+        if val is not None and str(val).strip():
+            return str(val).strip()
+    return ""
+
+
+def _metadata_summary(meta_row: Any) -> str:
+    """Compact description for metadata-poor databases."""
+    if isinstance(meta_row, dict):
+        pieces = []
+        for key in ["Protein names", "Description", "Name", "Organism", "Source", "Sample", "Annotation"]:
+            val = _meta_get(meta_row, key)
+            if val:
+                pieces.append(val)
+        return " | ".join(dict.fromkeys(pieces))
+    return str(meta_row).lstrip(">") if meta_row else ""
+
+
+def _format_results_display_df(results_df: pd.DataFrame, database_type: str = "Swiss-Prot") -> pd.DataFrame:
+    """Build the user-facing results table with database-aware columns.
+
+    Raw/export/session data keeps all fields. This only affects the browser table.
+    """
+    if results_df.empty:
+        return pd.DataFrame()
+
+    is_swiss = database_type in {"Swiss-Prot", "Swiss-Prot (540K)"}
+    is_scope = database_type == "SCOPE"
+    is_afdb = database_type == "AFDB (Clustered)"
+    is_euk = database_type == "Euk (74K)"
+
+    if is_swiss:
+        display_header_map = {
+            "query_meta": "Query",
+            "lookup_entry": "UniProt Entry",
+            "lookup_protein_names": "Protein Name(s)",
+            "lookup_pfam": "Pfam",
+            "prob_exact": "Exact Prob",
+            "prob_partial": "Partial Prob",
+        }
+        preferred_order = ["query_meta", "lookup_entry", "lookup_protein_names", "lookup_pfam", "prob_exact", "prob_partial"]
+    else:
+        display_header_map = {
+            "query_meta": "Query",
+            "lookup_entry": "Match ID",
+            "lookup_protein_names": "Description",
+            "lookup_organism": "Organism / Source",
+            "lookup_meta": "Description",
+            "prob_exact": "Exact Prob",
+            "prob_partial": "Partial Prob",
+        }
+        if is_scope:
+            display_header_map["lookup_entry"] = "SCOPe Match"
+            preferred_order = ["query_meta", "lookup_meta", "prob_exact", "prob_partial"]
+        elif is_afdb:
+            display_header_map["lookup_entry"] = "AFDB Entry"
+            preferred_order = ["query_meta", "lookup_entry", "prob_exact", "prob_partial"]
+        elif is_euk:
+            preferred_order = ["query_meta", "lookup_entry", "lookup_protein_names", "lookup_organism", "prob_exact", "prob_partial"]
+        else:
+            preferred_order = ["query_meta", "lookup_entry", "lookup_protein_names", "lookup_organism", "lookup_meta", "prob_exact", "prob_partial"]
+
+    hidden_cols = {"D_score", "p0", "p1", "p0_partial", "p1_partial", "query_seq", "lookup_seq"}
+    if is_swiss:
+        hidden_cols.add("lookup_meta")
+    # Pfam is Swiss-Prot-specific in practice; hide when unavailable/mostly empty.
+    if not is_swiss:
+        hidden_cols.add("lookup_pfam")
+
+    display_columns = [col for col in preferred_order if col in results_df.columns and col not in hidden_cols]
+    display_columns.extend([col for col in results_df.columns if col not in display_columns and col not in hidden_cols])
+    display_df = results_df.reindex(columns=display_columns).copy()
+
+    # Hide columns that are empty for almost all rows (metadata-sparse DBs).
+    keep_cols = []
+    for col in display_df.columns:
+        nonempty = display_df[col].apply(lambda v: bool(str(v).strip()) and str(v).strip().lower() != "nan").mean()
+        if nonempty > 0.1 or col in {"query_meta", "prob_exact", "prob_partial"}:
+            keep_cols.append(col)
+    display_df = display_df[keep_cols]
+
+    display_df = display_df.rename(columns=display_header_map)
+    _truncate_display_columns(display_df)
+    return display_df
 
 # When multiple searches hit the same lookup database without those files changing,
 # get_lookup_resources returns the preloaded FAISS index + metadata, so we avoid
@@ -824,11 +924,15 @@ def run_search(query_embeddings: np.ndarray,
                 }
                 if metadata_kind == "tsv":
                     meta_row = lookup_meta[idx]
-                    result["lookup_entry"] = meta_row.get("Entry", "")
-                    result["lookup_pfam"] = meta_row.get("Pfam", "")
-                    result["lookup_protein_names"] = meta_row.get("Protein names", "")
+                    result["lookup_entry"] = _meta_get(meta_row, "Entry", "Accession", "Protein ID")
+                    result["lookup_pfam"] = _meta_get(meta_row, "Pfam")
+                    result["lookup_protein_names"] = _meta_get(meta_row, "Protein names", "Description", "Name", "Annotation")
+                    result["lookup_organism"] = _meta_get(meta_row, "Organism", "Source", "Sample")
+                    result["lookup_meta"] = _metadata_summary(meta_row)
                 else:
-                    result["lookup_meta"] = lookup_meta[idx]
+                    meta = str(lookup_meta[idx]).lstrip(">")
+                    result["lookup_meta"] = meta
+                    result["lookup_entry"] = meta.split()[0] if meta else ""
                 results.append(result)
     results = pd.DataFrame(results)
     
@@ -1288,38 +1392,8 @@ def _process_input_impl(stage_timer: StageTimer,
                 "_cache": new_cache,
             }
 
-        # Format display DataFrame
-        # Internal columns hidden from display: D_score, p0, p1, p0_partial, p1_partial, query_seq
-        display_header_map = {
-            "query_meta": "Query",
-            "query_seq": "Query Sequence",
-            "lookup_seq": "Match Sequence",
-            "lookup_meta": "Match Description",
-            "lookup_entry": "UniProt Entry",
-            "lookup_pfam": "Pfam",
-            "lookup_protein_names": "Protein Name(s)",
-            "prob_exact": "Exact Prob",
-            "prob_partial": "Partial Prob",
-        }
-        preferred_order = [
-            "query_meta",
-            "lookup_entry",
-            "lookup_protein_names",
-            "lookup_pfam",
-            "prob_exact",
-            "prob_partial",
-        ]
-        HIDDEN_COLS = {"D_score", "p0", "p1", "p0_partial", "p1_partial", "query_seq", "lookup_seq", "lookup_meta"}
-        if not results_df.empty:
-            display_columns = [col for col in preferred_order if col in results_df.columns
-                               and col not in HIDDEN_COLS]
-            display_columns.extend([col for col in results_df.columns if col not in display_columns
-                                    and col not in HIDDEN_COLS])
-            display_df = results_df.reindex(columns=display_columns).copy()
-            display_df = display_df.rename(columns=display_header_map)
-            _truncate_display_columns(display_df)
-        else:
-            display_df = pd.DataFrame()
+        # Format user-facing table with database-aware labels/columns.
+        display_df = _format_results_display_df(results_df, database_type)
 
         return summary, display_df, new_session
     except Exception as e:
@@ -2333,30 +2407,8 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 filtered_matches = matches
 
             df = pd.DataFrame(filtered_matches)
-            # Apply display formatting (same as in _process_input_impl)
-            display_header_map = {
-                "query_meta": "Query",
-                "query_seq": "Query Sequence",
-                "lookup_seq": "Match Sequence",
-                "lookup_meta": "Match Description",
-                "lookup_entry": "UniProt Entry",
-                "lookup_pfam": "Pfam",
-                "lookup_protein_names": "Protein Name(s)",
-                "prob_exact": "Exact Prob",
-                "prob_partial": "Partial Prob",
-            }
-            preferred_order = [
-                "query_meta", "lookup_entry", "lookup_protein_names",
-                "lookup_pfam", "prob_exact", "prob_partial",
-            ]
-            HIDDEN_COLS = {"D_score", "p0", "p1", "p0_partial", "p1_partial", "query_seq", "lookup_seq", "lookup_meta"}
-            display_columns = [col for col in preferred_order if col in df.columns
-                               and col not in HIDDEN_COLS]
-            display_columns.extend([col for col in df.columns if col not in display_columns
-                                    and col not in HIDDEN_COLS])
-            display_df = df.reindex(columns=display_columns).copy()
-            display_df = display_df.rename(columns=display_header_map)
-            _truncate_display_columns(display_df)
+            database_type = (session or {}).get("parameters", {}).get("database_type", "Swiss-Prot")
+            display_df = _format_results_display_df(df, database_type)
 
             # Build probability plot for the filtered query
             plot_label = query_choice if query_choice and query_choice != "All queries" else None
@@ -2498,11 +2550,15 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
             if m:
                 parts = []
                 if m.get("lookup_protein_names"):
-                    parts.append(f"Protein: {m['lookup_protein_names']}")
+                    parts.append(f"Description: {m['lookup_protein_names']}")
                 if m.get("lookup_entry"):
-                    parts.append(f"Entry: {m['lookup_entry']}")
+                    parts.append(f"Match ID: {m['lookup_entry']}")
+                if m.get("lookup_organism"):
+                    parts.append(f"Organism / Source: {m['lookup_organism']}")
                 if m.get("lookup_pfam"):
                     parts.append(f"Pfam: {m['lookup_pfam']}")
+                elif m.get("lookup_meta"):
+                    parts.append(f"Metadata: {str(m['lookup_meta']).lstrip('>')}")
                 exact_prob = m.get("prob_exact")
                 if not exact_prob and m.get("p0") is not None and m.get("p1") is not None:
                     mean_e = (float(m["p0"]) + float(m["p1"])) / 2.0

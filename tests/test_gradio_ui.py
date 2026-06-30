@@ -81,3 +81,33 @@ def test_create_interface_accepts_injected_embedders():
 
     demo = create_interface(embed_fn=fake_embed, clean_embed_fn=fake_clean_embed)
     assert hasattr(demo, "cpr_theme")
+
+
+def test_results_display_df_is_database_aware():
+    pytest.importorskip("gradio")
+    import pandas as pd
+    from protein_conformal.backend.gradio_interface import _format_results_display_df
+
+    raw = pd.DataFrame([
+        {
+            "query_meta": "q1",
+            "lookup_entry": "EUK_001",
+            "lookup_protein_names": "hypothetical viral protein",
+            "lookup_organism": "Nomburg virome sample",
+            "lookup_pfam": "",
+            "lookup_meta": "",
+            "lookup_seq": "ACDE",
+            "prob_exact": "80.0% ± 1.0%",
+            "prob_partial": "90.0% ± 2.0%",
+        }
+    ])
+
+    euk = _format_results_display_df(raw, "Euk (74K)")
+    assert list(euk.columns) == ["Query", "Match ID", "Description", "Organism / Source", "Exact Prob", "Partial Prob"]
+    assert "Pfam" not in euk.columns
+
+    afdb = _format_results_display_df(raw.assign(lookup_protein_names="", lookup_organism=""), "AFDB (Clustered)")
+    assert list(afdb.columns) == ["Query", "AFDB Entry", "Exact Prob", "Partial Prob"]
+
+    scope = _format_results_display_df(raw.assign(lookup_meta=">d1abcA SCOPe domain", lookup_entry="d1abcA"), "SCOPE")
+    assert "SCOPe Match" in scope.columns or "Description" in scope.columns
