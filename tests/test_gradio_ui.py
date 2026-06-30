@@ -53,7 +53,7 @@ def test_setup_status_html_renders_readiness_rows():
     assert "Python dependencies" in html
 
 
-def test_create_interface_smoke_builds_blocks_with_theme_css_and_device_option():
+def test_create_interface_smoke_builds_blocks_with_theme_and_css_attrs():
     gr = pytest.importorskip("gradio")
     from protein_conformal.backend.gradio_interface import create_interface
 
@@ -63,15 +63,7 @@ def test_create_interface_smoke_builds_blocks_with_theme_css_and_device_option()
     assert hasattr(demo, "cpr_css")
     assert "#fasta-input" in demo.cpr_css
 
+    # Public web UI should not expose local CPU/MPS/CUDA device selection;
+    # Modal deployments use the GPU monkey-patched embedder automatically.
     labels = [getattr(block, "label", None) for block in demo.blocks.values()]
-    assert "Embedding Device" in labels
-
-    embedding_device_blocks = [
-        block for block in demo.blocks.values()
-        if getattr(block, "label", None) == "Embedding Device"
-    ]
-    assert embedding_device_blocks
-    choices = [choice[0] if isinstance(choice, (tuple, list)) else choice
-               for choice in embedding_device_blocks[0].choices]
-    assert "CPU" in choices
-    assert "Apple MPS (experimental)" in choices
+    assert "Embedding Device" not in labels

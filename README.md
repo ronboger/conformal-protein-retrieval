@@ -108,16 +108,21 @@ python protein_conformal/gradio_app.py --host 0.0.0.0 --port 7860
 
 The app disables Gradio's generated OpenAPI/Swagger docs and footer links by default, so users should interact through the web UI.
 
-### Embedding device selection
+### Embedding device notes
 
-The web app defaults to **CPU**, which is the most reliable option across local machines and servers. In Advanced Options, **Embedding Device** can be changed for experimentation:
+For the public/server deployment in `modal_app.py`, query embedding is offloaded to Modal GPU workers (`gi.run_embed_protein_vec = gpu_embed`). The Gradio UI does not expose a CPU/MPS/CUDA selector; users should simply run searches through the site.
 
-- **CPU**: safest default.
-- **Auto**: prefers CUDA, then Apple MPS, then CPU.
-- **Apple MPS (experimental)**: uses PyTorch's MPS backend with `PYTORCH_ENABLE_MPS_FALLBACK=1` so unsupported transformer ops fall back to CPU. This can be faster or slower depending on sequence length and memory pressure; CPU remains the recommended default for reliability.
-- **CUDA**: for Linux/server environments with a CUDA-capable PyTorch install.
+For local debugging on a Mac or workstation, the standalone embedding script supports an opt-in device flag:
 
-FAISS search is still CPU-backed in this setup; the device option only affects query embedding.
+```bash
+python protein_conformal/embed_protein_vec.py \
+  --input_file query.fasta \
+  --output_file query_embeddings.npy \
+  --path_to_protein_vec protein_vec_models \
+  --device cpu        # or: auto, cuda, mps
+```
+
+`--device mps` enables `PYTORCH_ENABLE_MPS_FALLBACK=1` because ProtT5 uses transformer ops that are not implemented natively on Apple MPS. This can be faster or slower depending on sequence length and memory pressure; CPU remains the safest local default. FAISS search is CPU-backed in this setup; the device flag only affects query embedding.
 
 ### Notes for macOS / mixed torch + FAISS environments
 

@@ -1007,12 +1007,24 @@ def _process_input_impl(stage_timer: StageTimer,
                 logger.info("Process-level embedding cache hit for %d sequences", len(sequences))
             else:
                 with stage_timer.track("protein_vec_embedding"):
-                    embeddings = run_embed_protein_vec(
-                        sequences,
-                        progress,
-                        fp16_head=fp16_head,
-                        embedding_device=embedding_device,
-                    )
+                    # Public Modal deployments monkey-patch run_embed_protein_vec
+                    # with gpu_embed(sequences, progress=None, fp16_head=False),
+                    # which should continue to use the Modal GPU path. Only pass
+                    # embedding_device when an explicitly non-default local device
+                    # is requested by developer-only code.
+                    if embedding_device and embedding_device != "cpu":
+                        embeddings = run_embed_protein_vec(
+                            sequences,
+                            progress,
+                            fp16_head=fp16_head,
+                            embedding_device=embedding_device,
+                        )
+                    else:
+                        embeddings = run_embed_protein_vec(
+                            sequences,
+                            progress,
+                            fp16_head=fp16_head,
+                        )
                 EMBEDDING_CACHE.put(emb_key, embeddings)
         except Exception as e:
             return {"error": f"Error generating embeddings: {str(e)}"}, pd.DataFrame(), (session or {})
@@ -1812,12 +1824,18 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                                      "(conformal guarantee not exact). GPU only.",
                             )
 
-                            embedding_device_dropdown = gr.Dropdown(
-                                ["CPU", "Auto", "Apple MPS (experimental)", "CUDA"],
-                                value="CPU",
-                                label="Embedding Device",
-                                info="CPU is safest. Apple MPS is experimental and uses PyTorch CPU fallback for unsupported ops.",
-                            )
+                            # Developer-only local device selector. Keep hidden/commented
+                            # for the public web UI, which uses Modal GPU embedding via
+                            # modal_app.py's gpu_embed monkey-patch.
+                            # embedding_device_dropdown = gr.Dropdown(
+                            #     ["CPU", "Auto", "Apple MPS (experimental)", "CUDA"],
+                            #     value="CPU",
+                            #     label="Embedding Device",
+                            #     info=(
+                            #         "Local-only experimental embedding device. "
+                            #         "Public Modal deployments use GPU automatically."
+                            #     ),
+                            # )
 
                             with gr.Accordion("Setup readiness", open=False):
                                 gr.HTML(_setup_status_html())
@@ -2133,7 +2151,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
         # Main prediction submission (dispatches between Protein Search and CLEAN)
         def on_submit(mode, fasta, upload, risk_t, risk_v, max_k, use_pv, custom_emb,
                       lookup, metadata, custom_lookup, custom_meta, m_type,
-                      min_prob, hide_unc, c_alpha, fp16_head, embedding_device_choice, session,
+                      min_prob, hide_unc, c_alpha, fp16_head, session,
                       progress=gr.Progress()):
             _t0 = time.perf_counter()
             if mode == "Enzyme Classification (CLEAN)":
@@ -2163,18 +2181,20 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 )
             else:
                 # Protein Search pipeline
-                device_map = {
-                    "CPU": "cpu",
-                    "Auto": "auto",
-                    "Apple MPS (experimental)": "mps",
-                    "CUDA": "cuda",
-                }
-                embedding_device = device_map.get(embedding_device_choice, "cpu")
+                # Developer-only local device map; leave commented for public web UI.
+                # Public Modal deployments use gi.run_embed_protein_vec = gpu_embed,
+                # so no device is passed from the UI.
+                # device_map = {
+                #     "CPU": "cpu",
+                #     "Auto": "auto",
+                #     "Apple MPS (experimental)": "mps",
+                #     "CUDA": "cuda",
+                # }
+                # embedding_device = device_map.get(embedding_device_choice, "cpu")
                 summary_json, df, session = process_input(
                     "", fasta, upload, "fasta_format", risk_t, risk_v, max_k,
                     use_pv, custom_emb, lookup, metadata, custom_lookup, custom_meta,
-                    m_type, min_prob, fp16_head=fp16_head, embedding_device=embedding_device,
-                    session=session,
+                    m_type, min_prob, fp16_head=fp16_head, session=session,
                     progress=progress,
                 )
                 # Apply hide-uncharacterized filter
@@ -2242,7 +2262,6 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 match_type, min_probability, hide_uncharacterized,
                 clean_alpha,
                 fp16_head_checkbox,
-                embedding_device_dropdown,
                 session_state,
             ],
             outputs=[results_summary, results_table, query_filter, sequence_detail, prob_plot, session_state, results_count_md, empty_state],
