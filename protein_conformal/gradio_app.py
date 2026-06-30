@@ -58,7 +58,7 @@ document.addEventListener('keydown', function(e) {
   }
 });
 
-// Native hover tooltips for quick-example buttons and database options.
+// Custom hover tooltips for quick-example buttons and database options.
 (function () {
   var exampleTips = {
     'example-cas9': 'CRISPR-associated nuclease; long, recognizable protein search example.',
@@ -74,36 +74,54 @@ document.addEventListener('keydown', function(e) {
     'Euk (74K)': 'Virome database from Nomburg et al. 2024 Nature; eukaryotic viral protein candidates.',
     'Custom': 'Upload your own Protein-Vec embeddings plus FASTA/TSV metadata.'
   };
-  function applyTips() {
-    Object.entries(exampleTips).forEach(function ([id, tip]) {
-      var root = document.getElementById(id);
-      if (!root) return;
-      root.setAttribute('title', tip);
-      var btn = root.tagName === 'BUTTON' ? root : root.querySelector('button');
-      if (btn) btn.setAttribute('title', tip);
-    });
 
-    var dbRoot = document.getElementById('database-radio') || document;
-    Object.entries(databaseTips).forEach(function ([label, tip]) {
-      Array.from(dbRoot.querySelectorAll('label, span, button, div, [role="radio"]')).forEach(function (el) {
-        var txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
-        // Match the rendered option itself, but avoid assigning a tooltip to a
-        // large wrapper that contains every option in the group.
-        if ((txt === label || txt.includes(label)) && txt.length <= label.length + 24) {
-          el.setAttribute('title', tip);
-          el.setAttribute('aria-label', label + ': ' + tip);
-          var parentLabel = el.closest('label');
-          if (parentLabel) parentLabel.setAttribute('title', tip);
-          var parentRadio = el.closest('[role="radio"]');
-          if (parentRadio) parentRadio.setAttribute('title', tip);
-        }
-      });
-    });
+  function tooltip() {
+    var t = document.getElementById('cpr-tooltip');
+    if (!t) {
+      t = document.createElement('div');
+      t.id = 'cpr-tooltip';
+      t.style.cssText = 'position:fixed;z-index:99999;max-width:320px;padding:8px 10px;border-radius:8px;background:#2d2440;color:white;font-size:13px;line-height:1.35;box-shadow:0 6px 20px rgba(0,0,0,.25);pointer-events:none;opacity:0;transition:opacity .08s ease;';
+      document.body.appendChild(t);
+    }
+    return t;
   }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', applyTips);
-  else applyTips();
-  document.addEventListener('pointerover', applyTips, {passive: true});
-  new MutationObserver(applyTips).observe(document.documentElement, {childList: true, subtree: true, characterData: true});
+  function showTip(text, x, y) {
+    var t = tooltip();
+    t.textContent = text;
+    t.style.left = Math.min(x + 12, window.innerWidth - 340) + 'px';
+    t.style.top = Math.min(y + 14, window.innerHeight - 80) + 'px';
+    t.style.opacity = '1';
+  }
+  function hideTip() { tooltip().style.opacity = '0'; }
+
+  function tipForElement(el) {
+    for (var id in exampleTips) {
+      var root = document.getElementById(id);
+      if (root && root.contains(el)) return exampleTips[id];
+    }
+    var dbRoot = document.getElementById('database-radio');
+    if (dbRoot && dbRoot.contains(el)) {
+      var node = el;
+      while (node && node !== dbRoot) {
+        var txt = (node.textContent || '').replace(/\s+/g, ' ').trim();
+        for (var label in databaseTips) {
+          if (txt === label || (txt.includes(label) && txt.length <= label.length + 24)) {
+            return databaseTips[label];
+          }
+        }
+        node = node.parentElement;
+      }
+    }
+    return null;
+  }
+
+  document.addEventListener('pointermove', function (e) {
+    var tip = tipForElement(e.target);
+    if (tip) showTip(tip, e.clientX, e.clientY);
+    else hideTip();
+  }, {passive: true});
+  document.addEventListener('pointerleave', hideTip, {passive: true});
+  document.addEventListener('scroll', hideTip, true);
 })();
 </script>
 """
