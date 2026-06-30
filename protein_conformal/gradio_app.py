@@ -26,6 +26,8 @@ from protein_conformal.backend.gradio_interface import create_interface
 # --- De-branding: custom favicon + social meta, no Gradio chrome in the UI. ---
 _FAVICON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "favicon.png")
 _CUSTOM_HEAD = """
+<link rel="icon" type="image/png" href="/favicon.ico">
+<link rel="shortcut icon" type="image/png" href="/favicon.ico">
 <meta name="description" content="Conformal Protein Retrieval — functional protein mining with statistical guarantees.">
 <meta property="og:title" content="Conformal Protein Retrieval">
 <meta property="og:description" content="Functional protein mining with statistical guarantees (Boger et al., Nature Communications 2025).">
