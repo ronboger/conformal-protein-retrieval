@@ -412,15 +412,15 @@ def _format_results_display_df(results_df: pd.DataFrame, database_type: str = "S
             "lookup_entry": "Match ID",
             "lookup_protein_names": "Description",
             "lookup_organism": "Organism / Source",
-            "lookup_meta": "Description",
+            "lookup_meta": "Metadata",
             "prob_exact": "Exact Prob",
             "prob_partial": "Partial Prob",
         }
         if is_scope:
-            display_header_map["lookup_entry"] = "SCOPe Match"
-            preferred_order = ["query_meta", "lookup_meta", "prob_exact", "prob_partial"]
+            display_header_map["lookup_entry"] = "SCOPe Domain"
+            preferred_order = ["query_meta", "lookup_entry", "prob_exact", "prob_partial"]
         elif is_afdb:
-            display_header_map["lookup_entry"] = "AFDB Entry"
+            display_header_map["lookup_entry"] = "AFDB / UniProt Accession"
             preferred_order = ["query_meta", "lookup_entry", "prob_exact", "prob_partial"]
         elif is_euk:
             preferred_order = ["query_meta", "lookup_entry", "lookup_protein_names", "lookup_organism", "prob_exact", "prob_partial"]
@@ -428,8 +428,10 @@ def _format_results_display_df(results_df: pd.DataFrame, database_type: str = "S
             preferred_order = ["query_meta", "lookup_entry", "lookup_protein_names", "lookup_organism", "lookup_meta", "prob_exact", "prob_partial"]
 
     hidden_cols = {"D_score", "p0", "p1", "p0_partial", "p1_partial", "query_seq", "lookup_seq"}
-    if is_swiss:
+    if is_swiss or is_scope or is_afdb or is_euk:
         hidden_cols.add("lookup_meta")
+    if is_scope:
+        hidden_cols.update({"lookup_protein_names", "lookup_organism"})
     # Pfam is Swiss-Prot-specific in practice; hide when unavailable/mostly empty.
     if not is_swiss:
         hidden_cols.add("lookup_pfam")
@@ -2549,10 +2551,21 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
 
             if m:
                 parts = []
+                database_type = (session or {}).get("parameters", {}).get("database_type", "Swiss-Prot")
                 if m.get("lookup_protein_names"):
                     parts.append(f"Description: {m['lookup_protein_names']}")
                 if m.get("lookup_entry"):
-                    parts.append(f"Match ID: {m['lookup_entry']}")
+                    if database_type == "SCOPE":
+                        entry_label = "SCOPe Domain"
+                    elif database_type == "AFDB (Clustered)":
+                        entry_label = "AFDB / UniProt Accession"
+                    elif database_type in {"Swiss-Prot", "Swiss-Prot (540K)"}:
+                        entry_label = "UniProt Entry"
+                    else:
+                        entry_label = "Match ID"
+                    parts.append(f"{entry_label}: {m['lookup_entry']}")
+                    if database_type == "AFDB (Clustered)":
+                        parts.append(f"AlphaFold DB: https://alphafold.ebi.ac.uk/entry/{m['lookup_entry']}")
                 if m.get("lookup_organism"):
                     parts.append(f"Organism / Source: {m['lookup_organism']}")
                 if m.get("lookup_pfam"):

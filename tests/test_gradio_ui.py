@@ -107,7 +107,7 @@ def test_results_display_df_is_database_aware():
     assert "Pfam" not in euk.columns
 
     afdb = _format_results_display_df(raw.assign(lookup_protein_names="", lookup_organism=""), "AFDB (Clustered)")
-    assert list(afdb.columns) == ["Query", "AFDB Entry", "Exact Prob", "Partial Prob"]
+    assert list(afdb.columns) == ["Query", "AFDB / UniProt Accession", "Exact Prob", "Partial Prob"]
 
     scope = _format_results_display_df(raw.assign(lookup_meta=">d1abcA SCOPe domain", lookup_entry="d1abcA"), "SCOPE")
-    assert "SCOPe Match" in scope.columns or "Description" in scope.columns
+    assert list(scope.columns) == ["Query", "SCOPe Domain", "Exact Prob", "Partial Prob"]
