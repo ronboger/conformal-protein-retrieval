@@ -457,7 +457,12 @@ def process_uploaded_file(file_obj) -> Tuple[List[str], List[str]]:
         raise AttributeError("Uploaded FASTA file is not readable and has no accessible path.")
     return parse_fasta(fasta_text)
 
-def run_embed_protein_vec(sequences: List[str], progress=None, fp16_head: bool = False) -> np.ndarray:
+def run_embed_protein_vec(
+    sequences: List[str],
+    progress=None,
+    fp16_head: bool = False,
+    embedding_device: str = "cpu",
+) -> np.ndarray:
     """
     use existing embed_protein_vec.py to generate embeddings
 
@@ -467,6 +472,7 @@ def run_embed_protein_vec(sequences: List[str], progress=None, fp16_head: bool =
         fp16_head: EXPERIMENTAL opt-in fp16 Protein-Vec head. Honored by the Modal
             GPU path (gpu_embed monkey-patches this function); ignored by this local
             subprocess fallback.
+        embedding_device: cpu, auto, cuda, or mps for the local subprocess.
 
     Returns:
         NumPy array of embeddings
@@ -490,15 +496,20 @@ def run_embed_protein_vec(sequences: List[str], progress=None, fp16_head: bool =
         
         # Run the embed_protein_vec.py script
         cmd = [
-            sys.executable, 
+            sys.executable,
             "protein_conformal/embed_protein_vec.py",
             "--input_file", tmp_fasta_path,
             "--output_file", tmp_out_path,
-            "--path_to_protein_vec", "protein_vec_models"
+            "--path_to_protein_vec", "protein_vec_models",
+            "--device", embedding_device,
         ]
-        
+
+        env = os.environ.copy()
+        if embedding_device in {"mps", "auto"}:
+            env.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
         # Run the command
-        result = subprocess.run(cmd, capture_output=True, text=True, cwd=".")
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=".", env=env)
         
         if result.returncode != 0:
             raise Exception(f"embed_protein_vec.py failed: {result.stderr}")
@@ -842,6 +853,7 @@ def process_input(input_text: str,
                   match_type: str = "Exact",
                   min_probability: float = 0.5,
                   fp16_head: bool = False,
+                  embedding_device: str = "cpu",
                   session: Optional[dict] = None,
                   progress=None) -> Tuple[str, pd.DataFrame, dict]:
     """Wrapper that instruments the main pipeline with timing information.
@@ -872,6 +884,7 @@ def process_input(input_text: str,
             match_type,
             min_probability,
             fp16_head,
+            embedding_device,
             session,
             progress,
         )
@@ -900,6 +913,7 @@ def _process_input_impl(stage_timer: StageTimer,
                         match_type: str = "Exact",
                         min_probability: float = 0.5,
                         fp16_head: bool = False,
+                        embedding_device: str = "cpu",
                         session: Optional[dict] = None,
                         progress=None) -> Tuple[Dict[str, Any], pd.DataFrame, dict]:
     """
@@ -973,6 +987,8 @@ def _process_input_impl(stage_timer: StageTimer,
     # fp32-head embeddings.
     if fp16_head:
         input_hash = f"{input_hash}:fp16head"
+    if embedding_device and embedding_device != "cpu":
+        input_hash = f"{input_hash}:device:{embedding_device}"
     cached = (session or {}).get("_cache", {})
     new_cache = cached  # preserved unless a fresh search overwrites it below
     embeddings = None
@@ -991,7 +1007,12 @@ def _process_input_impl(stage_timer: StageTimer,
                 logger.info("Process-level embedding cache hit for %d sequences", len(sequences))
             else:
                 with stage_timer.track("protein_vec_embedding"):
-                    embeddings = run_embed_protein_vec(sequences, progress, fp16_head=fp16_head)
+                    embeddings = run_embed_protein_vec(
+                        sequences,
+                        progress,
+                        fp16_head=fp16_head,
+                        embedding_device=embedding_device,
+                    )
                 EMBEDDING_CACHE.put(emb_key, embeddings)
         except Exception as e:
             return {"error": f"Error generating embeddings: {str(e)}"}, pd.DataFrame(), (session or {})
@@ -1791,6 +1812,13 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                                      "(conformal guarantee not exact). GPU only.",
                             )
 
+                            embedding_device_dropdown = gr.Dropdown(
+                                ["CPU", "Auto", "Apple MPS (experimental)", "CUDA"],
+                                value="CPU",
+                                label="Embedding Device",
+                                info="CPU is safest. Apple MPS is experimental and uses PyTorch CPU fallback for unsupported ops.",
+                            )
+
                             with gr.Accordion("Setup readiness", open=False):
                                 gr.HTML(_setup_status_html())
 
@@ -2105,7 +2133,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
         # Main prediction submission (dispatches between Protein Search and CLEAN)
         def on_submit(mode, fasta, upload, risk_t, risk_v, max_k, use_pv, custom_emb,
                       lookup, metadata, custom_lookup, custom_meta, m_type,
-                      min_prob, hide_unc, c_alpha, fp16_head, session,
+                      min_prob, hide_unc, c_alpha, fp16_head, embedding_device_choice, session,
                       progress=gr.Progress()):
             _t0 = time.perf_counter()
             if mode == "Enzyme Classification (CLEAN)":
@@ -2135,10 +2163,18 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 )
             else:
                 # Protein Search pipeline
+                device_map = {
+                    "CPU": "cpu",
+                    "Auto": "auto",
+                    "Apple MPS (experimental)": "mps",
+                    "CUDA": "cuda",
+                }
+                embedding_device = device_map.get(embedding_device_choice, "cpu")
                 summary_json, df, session = process_input(
                     "", fasta, upload, "fasta_format", risk_t, risk_v, max_k,
                     use_pv, custom_emb, lookup, metadata, custom_lookup, custom_meta,
-                    m_type, min_prob, fp16_head=fp16_head, session=session,
+                    m_type, min_prob, fp16_head=fp16_head, embedding_device=embedding_device,
+                    session=session,
                     progress=progress,
                 )
                 # Apply hide-uncharacterized filter
@@ -2206,6 +2242,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 match_type, min_probability, hide_uncharacterized,
                 clean_alpha,
                 fp16_head_checkbox,
+                embedding_device_dropdown,
                 session_state,
             ],
             outputs=[results_summary, results_table, query_filter, sequence_detail, prob_plot, session_state, results_count_md, empty_state],

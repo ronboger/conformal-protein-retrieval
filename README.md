@@ -108,6 +108,17 @@ python protein_conformal/gradio_app.py --host 0.0.0.0 --port 7860
 
 The app disables Gradio's generated OpenAPI/Swagger docs and footer links by default, so users should interact through the web UI.
 
+### Embedding device selection
+
+The web app defaults to **CPU**, which is the most reliable option across local machines and servers. In Advanced Options, **Embedding Device** can be changed for experimentation:
+
+- **CPU**: safest default.
+- **Auto**: prefers CUDA, then Apple MPS, then CPU.
+- **Apple MPS (experimental)**: uses PyTorch's MPS backend with `PYTORCH_ENABLE_MPS_FALLBACK=1` so unsupported transformer ops fall back to CPU. This can be faster or slower depending on sequence length and memory pressure; CPU remains the recommended default for reliability.
+- **CUDA**: for Linux/server environments with a CUDA-capable PyTorch install.
+
+FAISS search is still CPU-backed in this setup; the device option only affects query embedding.
+
 ### Notes for macOS / mixed torch + FAISS environments
 
 The launcher sets `KMP_DUPLICATE_LIB_OK=TRUE` and `OMP_NUM_THREADS=1` before imports. This avoids a known macOS OpenMP runtime crash when torch and faiss each load their own `libomp.dylib`.
