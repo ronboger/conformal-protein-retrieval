@@ -387,79 +387,103 @@ def _metadata_summary(meta_row: Any) -> str:
     return str(meta_row).lstrip(">") if meta_row else ""
 
 
-AFDB_UNIPROT_CACHE: Dict[str, Dict[str, str]] = {}
+AFDB_CLUSTER_API_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
-def _fetch_uniprot_metadata(accessions: List[str], chunk_size: int = 50) -> Dict[str, Dict[str, str]]:
-    """Fetch lightweight UniProt metadata for AFDB accessions.
+def _fetch_afdb_cluster_metadata(accessions: List[str], max_workers: int = 12) -> Dict[str, Dict[str, Any]]:
+    """Fetch display metadata from the AFDB Cluster API for visible AFDB hits.
 
-    Called only for displayed AFDB hits, not the full 2.3M-entry AFDB database.
-    Failures are non-fatal; the UI falls back to accession-only display.
+    The AFDB cluster TSV gives reliable cluster metrics for all 2.3M representatives,
+    but the interactive AFDB cluster site exposes more helpful display metadata like
+    protein description and taxonomic names. Query only displayed hits and cache them.
     """
-    import io
-
     wanted = []
     for acc in dict.fromkeys(a for a in accessions if a):
-        if acc not in AFDB_UNIPROT_CACHE:
+        if acc not in AFDB_CLUSTER_API_CACHE:
             wanted.append(acc)
     if not wanted:
-        return {a: AFDB_UNIPROT_CACHE.get(a, {}) for a in accessions}
+        return {a: AFDB_CLUSTER_API_CACHE.get(a, {}) for a in accessions}
 
     try:
         import requests
+        from concurrent.futures import ThreadPoolExecutor, as_completed
     except Exception:
-        return {a: AFDB_UNIPROT_CACHE.get(a, {}) for a in accessions}
+        return {a: AFDB_CLUSTER_API_CACHE.get(a, {}) for a in accessions}
 
-    fields = "accession,id,protein_name,organism_name,gene_names,reviewed,length"
-    for i in range(0, len(wanted), chunk_size):
-        chunk = wanted[i:i + chunk_size]
-        query = " OR ".join(f"accession:{acc}" for acc in chunk)
+    session = requests.Session()
+
+    def fetch_one(acc: str) -> tuple[str, Dict[str, Any]]:
         try:
-            resp = requests.get(
-                "https://rest.uniprot.org/uniprotkb/search",
-                params={"query": query, "fields": fields, "format": "tsv", "size": len(chunk)},
-                timeout=20,
-            )
-            resp.raise_for_status()
-            if not resp.text.strip():
-                continue
-            df = pd.read_csv(io.StringIO(resp.text), sep="\t").fillna("")
-            for _, row in df.iterrows():
-                AFDB_UNIPROT_CACHE[str(row.get("Entry", ""))] = {
-                    "entry_name": str(row.get("Entry Name", "")),
-                    "protein_name": str(row.get("Protein names", "")),
-                    "organism": str(row.get("Organism", "")),
-                    "gene_names": str(row.get("Gene Names", "")),
-                    "reviewed": str(row.get("Reviewed", "")),
-                    "length": str(row.get("Length", "")),
-                }
+            # Most rows in our clustered AFDB are representatives, so /cluster/<acc>
+            # is usually enough. If not, /api/<acc> maps member -> representative.
+            r = session.get(f"https://cluster.foldseek.com/api/cluster/{acc}", timeout=12)
+            if r.status_code == 404:
+                lookup = session.get(f"https://cluster.foldseek.com/api/{acc}", timeout=12)
+                lookup.raise_for_status()
+                arr = lookup.json()
+                if arr:
+                    rep = arr[0].get("rep_accession")
+                    if rep:
+                        r = session.get(f"https://cluster.foldseek.com/api/cluster/{rep}", timeout=12)
+            r.raise_for_status()
+            d = r.json()
+            tax = d.get("tax_id") or {}
+            lca = d.get("lca_tax_id") or {}
+            return acc, {
+                "description": str(d.get("description") or "").strip(),
+                "organism": str(tax.get("name") or "").strip(),
+                "tax_rank": str(tax.get("rank") or "").strip(),
+                "tax_id": str(tax.get("id") or "").strip(),
+                "lca_name": str(lca.get("name") or "").strip(),
+                "lca_rank": str(lca.get("rank") or "").strip(),
+                "lca_tax_id": str(lca.get("id") or "").strip(),
+                "rep_accession": str(d.get("rep_accession") or "").strip(),
+                "cluster_members": str(d.get("n_mem") or "").strip(),
+                "rep_len": str(d.get("rep_len") or "").strip(),
+                "avg_len": str(d.get("avg_len") or "").strip(),
+                "rep_plddt": str(d.get("rep_plddt") or "").strip(),
+                "avg_plddt": str(d.get("avg_plddt") or "").strip(),
+                "is_dark": str(d.get("is_dark") or "").strip(),
+            }
         except Exception as exc:
-            logger.warning("UniProt AFDB metadata lookup failed for %d accessions: %s", len(chunk), exc)
-            continue
+            logger.debug("AFDB cluster API metadata lookup failed for %s: %s", acc, exc)
+            return acc, {}
 
-    return {a: AFDB_UNIPROT_CACHE.get(a, {}) for a in accessions}
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = [ex.submit(fetch_one, acc) for acc in wanted]
+        for fut in as_completed(futures):
+            acc, info = fut.result()
+            AFDB_CLUSTER_API_CACHE[acc] = info
+
+    return {a: AFDB_CLUSTER_API_CACHE.get(a, {}) for a in accessions}
 
 
 def _enrich_afdb_display_matches(matches: List[Dict[str, Any]]) -> None:
-    """In-place UniProt metadata enrichment for displayed AFDB rows."""
+    """In-place AFDB cluster-site metadata enrichment for displayed rows."""
     accessions = [m.get("lookup_entry", "") for m in matches]
-    meta = _fetch_uniprot_metadata(accessions)
+    meta = _fetch_afdb_cluster_metadata(accessions)
     for m in matches:
         acc = m.get("lookup_entry", "")
         info = meta.get(acc) or {}
-        protein_name = info.get("protein_name", "").strip()
-        if protein_name and protein_name.lower() != "deleted":
-            m["lookup_protein_names"] = protein_name
-        if info.get("organism"):
-            m["lookup_organism"] = info["organism"]
-        if info.get("entry_name"):
-            m["lookup_entry_name"] = info["entry_name"]
-        if info.get("gene_names"):
-            m["lookup_gene_names"] = info["gene_names"]
-        if info.get("reviewed"):
-            m["lookup_reviewed"] = info["reviewed"]
-        if info.get("length"):
-            m["lookup_length"] = info["length"]
+        description = info.get("description", "").strip()
+        if description:
+            m["lookup_protein_names"] = description
+        organism = info.get("organism", "").strip()
+        if organism:
+            rank = info.get("tax_rank", "").strip()
+            m["lookup_organism"] = f"{organism} ({rank})" if rank else organism
+        for src, dst in [
+            ("cluster_members", "lookup_cluster_members"),
+            ("rep_len", "lookup_rep_len"),
+            ("avg_len", "lookup_avg_len"),
+            ("rep_plddt", "lookup_rep_plddt"),
+            ("avg_plddt", "lookup_avg_plddt"),
+            ("lca_tax_id", "lookup_lca_taxid"),
+            ("lca_name", "lookup_lca_name"),
+            ("is_dark", "lookup_is_dark"),
+        ]:
+            if info.get(src):
+                m[dst] = info[src]
 
 
 def _format_results_display_df(results_df: pd.DataFrame, database_type: str = "Swiss-Prot") -> pd.DataFrame:
@@ -2707,7 +2731,9 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                             parts.append(f"Representative pLDDT: {m['lookup_rep_plddt']}")
                         if m.get("lookup_avg_plddt"):
                             parts.append(f"Average Cluster pLDDT: {m['lookup_avg_plddt']}")
-                        if m.get("lookup_lca_taxid"):
+                        if m.get("lookup_lca_name"):
+                            parts.append(f"Lowest Common Ancestor: {m['lookup_lca_name']}")
+                        elif m.get("lookup_lca_taxid"):
                             parts.append(f"Lowest Common Ancestor Tax ID: {m['lookup_lca_taxid']}")
                 if m.get("lookup_organism"):
                     parts.append(f"Organism / Source: {m['lookup_organism']}")
