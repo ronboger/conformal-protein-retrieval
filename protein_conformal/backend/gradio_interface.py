@@ -569,10 +569,13 @@ def _format_results_display_df(results_df: pd.DataFrame, database_type: str = "S
     display_df = results_df.reindex(columns=display_columns).copy()
 
     # Hide columns that are empty for almost all rows (metadata-sparse DBs).
+    # For AFDB, keep protein/organism columns if even one displayed row is enriched.
     keep_cols = []
     for col in display_df.columns:
         nonempty = display_df[col].apply(lambda v: bool(str(v).strip()) and str(v).strip().lower() != "nan").mean()
-        if nonempty > 0.1 or col in {"query_meta", "prob_exact", "prob_partial"}:
+        always_keep = {"query_meta", "prob_exact", "prob_partial"}
+        sparse_keep = is_afdb and col in {"lookup_protein_names", "lookup_organism"} and nonempty > 0
+        if nonempty > 0.1 or col in always_keep or sparse_keep:
             keep_cols.append(col)
     display_df = display_df[keep_cols]
 
