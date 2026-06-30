@@ -1846,6 +1846,7 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                             "wrap": False,
                             "interactive": True,
                             "elem_id": "results-table",
+                            "show_row_numbers": True,
                         }
                         if DATAFRAME_SUPPORTS_MAX_CHARS:
                             results_table_kwargs["max_chars"] = RESULTS_TABLE_MAX_CHARS
