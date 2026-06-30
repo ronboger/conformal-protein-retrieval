@@ -38,6 +38,80 @@ cpr verify --check syn30
 
 See **[GETTING_STARTED.md](GETTING_STARTED.md)** for detailed instructions.
 
+## Web App / Server Setup
+
+Most users will run the interactive Gradio app on a server or workstation with the large data/model files already present on disk. The app itself does not require deployment to test locally; bind it to `127.0.0.1` for local review or to your server interface behind a reverse proxy for shared use.
+
+### 1. Install the app environment
+
+Use the repository environment, then install the package in editable mode:
+
+```bash
+conda env create -f environment.yml
+conda activate protein-conformal
+pip install -e .
+```
+
+If you are using an existing environment, make sure the web/embedding dependencies are installed:
+
+```bash
+pip install gradio pytorch-lightning h5py sentencepiece protobuf tiktoken
+```
+
+### 2. Download required search assets
+
+Protein Search needs the Swiss-Prot lookup database and calibration data:
+
+```bash
+mkdir -p data
+curl -L -o data/lookup_embeddings.npy \
+  "https://zenodo.org/records/14272215/files/lookup_embeddings.npy?download=1"
+curl -L -o data/lookup_embeddings_meta_data.tsv \
+  "https://zenodo.org/records/14272215/files/lookup_embeddings_meta_data.tsv?download=1"
+curl -L -o data/pfam_new_proteins.npy \
+  "https://zenodo.org/records/14272215/files/pfam_new_proteins.npy?download=1"
+```
+
+Protein-Vec embeddings require the model bundle:
+
+```bash
+curl -L -o protein_vec_models.gz \
+  "https://zenodo.org/records/18478696/files/protein_vec_models.gz?download=1"
+tar -xzf protein_vec_models.gz
+```
+
+The model directory should contain both checkpoint files and Python architecture files such as `model_protein_moe.py` and `utils_search.py`.
+
+### 3. Prebuild the FAISS sidecar index
+
+For server use, prebuild the exact FAISS index once. This avoids loading and copying the 1GB `.npy` on each cold search and prevents unnecessary memory pressure:
+
+```bash
+python scripts/prebuild_faiss.py ./data/lookup_embeddings.npy
+```
+
+This writes `data/lookup_embeddings.faissindex`, which the web app will prefer automatically.
+
+### 4. Launch the web app
+
+Local-only review:
+
+```bash
+python protein_conformal/gradio_app.py --host 127.0.0.1 --port 7860
+```
+
+Server binding, typically behind a reverse proxy:
+
+```bash
+python protein_conformal/gradio_app.py --host 0.0.0.0 --port 7860
+```
+
+The app disables Gradio's generated OpenAPI/Swagger docs and footer links by default, so users should interact through the web UI.
+
+### Notes for macOS / mixed torch + FAISS environments
+
+The launcher sets `KMP_DUPLICATE_LIB_OK=TRUE` and `OMP_NUM_THREADS=1` before imports. This avoids a known macOS OpenMP runtime crash when torch and faiss each load their own `libomp.dylib`.
+
 ## Repository Structure
 
 ```
