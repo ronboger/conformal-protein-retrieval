@@ -477,8 +477,19 @@ def ui():
 
     # Create and serve the Gradio interface with explicit GPU-backed embedders.
     from protein_conformal.backend.gradio_interface import create_interface
+    from protein_conformal.gradio_app import _CUSTOM_HEAD, _FAVICON
 
     demo = create_interface(embed_fn=gpu_embed, clean_embed_fn=gpu_embed_clean)
     demo.queue(max_size=10, default_concurrency_limit=5)
 
-    return mount_gradio_app(app=FastAPI(), blocks=demo, path="/")
+    return mount_gradio_app(
+        app=FastAPI(),
+        blocks=demo,
+        path="/",
+        footer_links=[],
+        favicon_path=_FAVICON,
+        head=_CUSTOM_HEAD,
+        theme=getattr(demo, "cpr_theme", None),
+        css=getattr(demo, "cpr_css", None),
+        app_kwargs=dict(openapi_url=None, docs_url=None, redoc_url=None),
+    )
