@@ -83,22 +83,27 @@ document.addEventListener('keydown', function(e) {
       if (btn) btn.setAttribute('title', tip);
     });
 
-    var dbRoot = document.getElementById('database-radio');
-    if (dbRoot) {
-      Object.entries(databaseTips).forEach(function ([label, tip]) {
-        Array.from(dbRoot.querySelectorAll('label, span, button, div')).forEach(function (el) {
-          if ((el.textContent || '').trim() === label) {
-            el.setAttribute('title', tip);
-            var parentLabel = el.closest('label');
-            if (parentLabel) parentLabel.setAttribute('title', tip);
-          }
-        });
+    var dbRoot = document.getElementById('database-radio') || document;
+    Object.entries(databaseTips).forEach(function ([label, tip]) {
+      Array.from(dbRoot.querySelectorAll('label, span, button, div, [role="radio"]')).forEach(function (el) {
+        var txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
+        // Match the rendered option itself, but avoid assigning a tooltip to a
+        // large wrapper that contains every option in the group.
+        if ((txt === label || txt.includes(label)) && txt.length <= label.length + 24) {
+          el.setAttribute('title', tip);
+          el.setAttribute('aria-label', label + ': ' + tip);
+          var parentLabel = el.closest('label');
+          if (parentLabel) parentLabel.setAttribute('title', tip);
+          var parentRadio = el.closest('[role="radio"]');
+          if (parentRadio) parentRadio.setAttribute('title', tip);
+        }
       });
-    }
+    });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', applyTips);
   else applyTips();
-  new MutationObserver(applyTips).observe(document.documentElement, {childList: true, subtree: true});
+  document.addEventListener('pointerover', applyTips, {passive: true});
+  new MutationObserver(applyTips).observe(document.documentElement, {childList: true, subtree: true, characterData: true});
 })();
 </script>
 """
