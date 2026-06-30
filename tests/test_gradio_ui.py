@@ -119,7 +119,7 @@ def test_results_display_df_is_database_aware():
     )
     assert list(afdb.columns) == [
         "Query", "AFDB / UniProt Accession", "Cluster Size", "Rep pLDDT",
-        "Avg pLDDT", "LCA Tax ID", "Exact Prob", "Partial Prob",
+        "Avg pLDDT", "Exact Prob", "Partial Prob",
     ]
 
     scope = _format_results_display_df(raw.assign(lookup_meta=">d1abcA SCOPe domain", lookup_entry="d1abcA"), "SCOPE")

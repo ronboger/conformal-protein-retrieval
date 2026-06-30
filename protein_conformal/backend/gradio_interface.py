@@ -509,14 +509,15 @@ def _format_results_display_df(results_df: pd.DataFrame, database_type: str = "S
         elif is_afdb:
             display_header_map.update({
                 "lookup_entry": "AFDB / UniProt Accession",
+                "lookup_protein_names": "Protein Name",
+                "lookup_organism": "Organism",
                 "lookup_cluster_members": "Cluster Size",
                 "lookup_rep_plddt": "Rep pLDDT",
                 "lookup_avg_plddt": "Avg pLDDT",
-                "lookup_lca_taxid": "LCA Tax ID",
             })
             preferred_order = [
-                "query_meta", "lookup_entry", "lookup_cluster_members",
-                "lookup_rep_plddt", "lookup_avg_plddt", "lookup_lca_taxid",
+                "query_meta", "lookup_entry", "lookup_protein_names", "lookup_organism",
+                "lookup_cluster_members", "lookup_rep_plddt", "lookup_avg_plddt",
                 "prob_exact", "prob_partial",
             ]
         elif is_euk:
@@ -529,6 +530,11 @@ def _format_results_display_df(results_df: pd.DataFrame, database_type: str = "S
         hidden_cols.add("lookup_meta")
     if is_scope:
         hidden_cols.update({"lookup_protein_names", "lookup_organism"})
+    if is_afdb:
+        hidden_cols.update({
+            "lookup_lca_taxid", "lookup_is_dark", "lookup_rep_len", "lookup_avg_len",
+            "lookup_entry_name", "lookup_gene_names", "lookup_reviewed", "lookup_length",
+        })
     # Pfam is Swiss-Prot-specific in practice; hide when unavailable/mostly empty.
     if not is_swiss:
         hidden_cols.add("lookup_pfam")
@@ -1433,6 +1439,9 @@ def _process_input_impl(stage_timer: StageTimer,
         # Only the table display is capped; all_matches (full set) still flows into
         # the session for download/export below.
         display_matches = cap_matches_per_query(all_matches, "query_meta", DISPLAY_ROWS_PER_QUERY)
+        if database_type == "AFDB (Clustered)" and display_matches:
+            with stage_timer.track("afdb_uniprot_metadata"):
+                _enrich_afdb_display_matches(display_matches)
         results_df = pd.DataFrame(display_matches) if display_matches else pd.DataFrame()
 
         with stage_timer.track("results_packaging"):
@@ -2520,8 +2529,10 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
             else:
                 filtered_matches = matches
 
-            df = pd.DataFrame(filtered_matches)
             database_type = (session or {}).get("parameters", {}).get("database_type", "Swiss-Prot")
+            if database_type == "AFDB (Clustered)" and filtered_matches:
+                _enrich_afdb_display_matches(filtered_matches[:DISPLAY_ROWS_PER_QUERY])
+            df = pd.DataFrame(filtered_matches)
             display_df = _format_results_display_df(df, database_type)
 
             # Build probability plot for the filtered query
@@ -2678,6 +2689,14 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                     parts.append(f"{entry_label}: {m['lookup_entry']}")
                     if database_type == "AFDB (Clustered)":
                         parts.append(f"AlphaFold DB: https://alphafold.ebi.ac.uk/entry/{m['lookup_entry']}")
+                        if m.get("lookup_entry_name"):
+                            parts.append(f"UniProt Entry Name: {m['lookup_entry_name']}")
+                        if m.get("lookup_gene_names"):
+                            parts.append(f"Gene Names: {m['lookup_gene_names']}")
+                        if m.get("lookup_reviewed"):
+                            parts.append(f"UniProt Status: {m['lookup_reviewed']}")
+                        if m.get("lookup_length"):
+                            parts.append(f"UniProt Length: {m['lookup_length']}")
                         if m.get("lookup_cluster_members"):
                             parts.append(f"Cluster Size: {m['lookup_cluster_members']}")
                         if m.get("lookup_rep_plddt"):
@@ -2685,12 +2704,12 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                         if m.get("lookup_avg_plddt"):
                             parts.append(f"Average Cluster pLDDT: {m['lookup_avg_plddt']}")
                         if m.get("lookup_lca_taxid"):
-                            parts.append(f"LCA Tax ID: {m['lookup_lca_taxid']}")
+                            parts.append(f"Lowest Common Ancestor Tax ID: {m['lookup_lca_taxid']}")
                 if m.get("lookup_organism"):
                     parts.append(f"Organism / Source: {m['lookup_organism']}")
                 if m.get("lookup_pfam"):
                     parts.append(f"Pfam: {m['lookup_pfam']}")
-                elif m.get("lookup_meta"):
+                elif m.get("lookup_meta") and database_type != "AFDB (Clustered)":
                     parts.append(f"Metadata: {str(m['lookup_meta']).lstrip('>')}")
                 exact_prob = m.get("prob_exact")
                 if not exact_prob and m.get("p0") is not None and m.get("p1") is not None:
