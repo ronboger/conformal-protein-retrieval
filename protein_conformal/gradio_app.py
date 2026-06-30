@@ -58,23 +58,43 @@ document.addEventListener('keydown', function(e) {
   }
 });
 
-// Native hover tooltips for quick-example buttons.
+// Native hover tooltips for quick-example buttons and database options.
 (function () {
-  var tips = {
+  var exampleTips = {
     'example-cas9': 'CRISPR-associated nuclease; long, recognizable protein search example.',
     'example-reca': 'Bacterial DNA repair and homologous recombination protein.',
     'example-coxa': 'Cytochrome c oxidase subunit; membrane-associated enzyme example.',
     'example-insulin': 'Short human hormone sequence; quick lightweight example.',
     'example-syn30': 'Unknown genes from the Syn3.0 minimal genome; multi-query discovery example.'
   };
+  var databaseTips = {
+    'Swiss-Prot (540K)': 'Reviewed UniProt/Swiss-Prot proteins; curated broad-coverage functional lookup database.',
+    'SCOPE': 'SCOPe structural classification database for structure/fold-oriented protein search.',
+    'AFDB (Clustered)': 'Clustered AlphaFold Database representatives for broad predicted-structure coverage.',
+    'Euk (74K)': 'Virome database from Nomburg et al. 2024 Nature; eukaryotic viral protein candidates.',
+    'Custom': 'Upload your own Protein-Vec embeddings plus FASTA/TSV metadata.'
+  };
   function applyTips() {
-    Object.entries(tips).forEach(function ([id, tip]) {
+    Object.entries(exampleTips).forEach(function ([id, tip]) {
       var root = document.getElementById(id);
       if (!root) return;
       root.setAttribute('title', tip);
       var btn = root.tagName === 'BUTTON' ? root : root.querySelector('button');
       if (btn) btn.setAttribute('title', tip);
     });
+
+    var dbRoot = document.getElementById('database-radio');
+    if (dbRoot) {
+      Object.entries(databaseTips).forEach(function ([label, tip]) {
+        Array.from(dbRoot.querySelectorAll('label, span, button, div')).forEach(function (el) {
+          if ((el.textContent || '').trim() === label) {
+            el.setAttribute('title', tip);
+            var parentLabel = el.closest('label');
+            if (parentLabel) parentLabel.setAttribute('title', tip);
+          }
+        });
+      });
+    }
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', applyTips);
   else applyTips();

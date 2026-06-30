@@ -1805,7 +1805,8 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                                 ["Swiss-Prot (540K)", "SCOPE", "AFDB (Clustered)", "Euk (74K)", "Custom"],
                                 label="Database",
                                 value="Swiss-Prot (540K)",
-                                info="Select lookup database"
+                                info="Select lookup database",
+                                elem_id="database-radio",
                             )
 
                             max_results_slider = gr.Slider(
