@@ -106,8 +106,21 @@ def test_results_display_df_is_database_aware():
     assert list(euk.columns) == ["Query", "Match ID", "Description", "Organism / Source", "Exact Prob", "Partial Prob"]
     assert "Pfam" not in euk.columns
 
-    afdb = _format_results_display_df(raw.assign(lookup_protein_names="", lookup_organism=""), "AFDB (Clustered)")
-    assert list(afdb.columns) == ["Query", "AFDB / UniProt Accession", "Exact Prob", "Partial Prob"]
+    afdb = _format_results_display_df(
+        raw.assign(
+            lookup_protein_names="",
+            lookup_organism="",
+            lookup_cluster_members="39",
+            lookup_rep_plddt="94.2",
+            lookup_avg_plddt="87.3",
+            lookup_lca_taxid="131567",
+        ),
+        "AFDB (Clustered)",
+    )
+    assert list(afdb.columns) == [
+        "Query", "AFDB / UniProt Accession", "Cluster Size", "Rep pLDDT",
+        "Avg pLDDT", "LCA Tax ID", "Exact Prob", "Partial Prob",
+    ]
 
     scope = _format_results_display_df(raw.assign(lookup_meta=">d1abcA SCOPe domain", lookup_entry="d1abcA"), "SCOPE")
     assert list(scope.columns) == ["Query", "SCOPe Domain", "Exact Prob", "Partial Prob"]

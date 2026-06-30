@@ -158,7 +158,7 @@ def _check_volume_data():
         "data/lookup_embeddings.npy",
         "data/lookup_embeddings_meta_data.tsv",
         "data/lookup/scope_lookup_embeddings.npy",
-        "data/lookup/scope_lookup.fasta",
+        "data/lookup/scope_metadata.tsv",
     ]
     optional = [
         "data/gene_unknown/unknown_aa_seqs.fasta",

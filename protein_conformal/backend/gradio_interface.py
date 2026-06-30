@@ -199,10 +199,10 @@ DEFAULT_LOOKUP_METADATA = "./data/lookup_embeddings_meta_data.tsv" # default pat
 DEFAULT_CALIBRATION_DATA = "./results/calibration_probs.csv" # default path to the calibration data
 
 DEFAULT_SCOPE_EMBEDDING = "./data/lookup/scope_lookup_embeddings.npy" # default path to the SCOPE lookup embeddings
-DEFAULT_SCOPE_METADATA = "./data/lookup/scope_lookup.fasta" # default path to the SCOPE lookup metadata
+DEFAULT_SCOPE_METADATA = "./data/lookup/scope_metadata.tsv" # enriched SCOPe lookup metadata (Entry + hierarchy + Sequence)
 
 DEFAULT_AFDB_EMBEDDING = "./data/afdb/afdb_embeddings_protein_vec.npy" # default path to the AFDB lookup embeddings
-DEFAULT_AFDB_METADATA = "./data/afdb/afdb_metadata.tsv" # default path to the AFDB lookup metadata
+DEFAULT_AFDB_METADATA = "./data/afdb/afdb_metadata_enriched.tsv" # enriched AFDB cluster lookup metadata
 
 DEFAULT_EUK_EMBEDDING = "./data/euk/euk_embeddings_protein_vec.npy" # default path to the Euk lookup embeddings
 DEFAULT_EUK_METADATA = "./data/euk/euk_metadata.tsv" # default path to the Euk lookup metadata
@@ -343,6 +343,10 @@ def _load_lookup_metadata(metadata_path: str) -> Tuple[str, List[str], List[Any]
             "Entry", "Entry Name", "Protein names", "Organism", "Pfam", "EC number",
             "Description", "Name", "Accession", "TaxID", "Source", "Sample",
             "Contig", "Protein ID", "Annotation",
+            "SCOPe SID", "SCOPe Release", "PDB", "Chain", "SCCS", "Class",
+            "Fold", "Superfamily", "Family", "Protein", "Species",
+            "Cluster members", "Representative length", "Average length",
+            "Representative pLDDT", "Average pLDDT", "LCA tax ID", "isDark",
         ]
         metadata_columns = [col for col in useful_columns if col in df.columns]
         if metadata_columns:
@@ -383,6 +387,80 @@ def _metadata_summary(meta_row: Any) -> str:
     return str(meta_row).lstrip(">") if meta_row else ""
 
 
+AFDB_UNIPROT_CACHE: Dict[str, Dict[str, str]] = {}
+
+
+def _fetch_uniprot_metadata(accessions: List[str], chunk_size: int = 50) -> Dict[str, Dict[str, str]]:
+    """Fetch lightweight UniProt metadata for AFDB accessions.
+
+    Called only for displayed AFDB hits, not the full 2.3M-entry AFDB database.
+    Failures are non-fatal; the UI falls back to accession-only display.
+    """
+    import io
+
+    wanted = []
+    for acc in dict.fromkeys(a for a in accessions if a):
+        if acc not in AFDB_UNIPROT_CACHE:
+            wanted.append(acc)
+    if not wanted:
+        return {a: AFDB_UNIPROT_CACHE.get(a, {}) for a in accessions}
+
+    try:
+        import requests
+    except Exception:
+        return {a: AFDB_UNIPROT_CACHE.get(a, {}) for a in accessions}
+
+    fields = "accession,id,protein_name,organism_name,gene_names,reviewed,length"
+    for i in range(0, len(wanted), chunk_size):
+        chunk = wanted[i:i + chunk_size]
+        query = " OR ".join(f"accession:{acc}" for acc in chunk)
+        try:
+            resp = requests.get(
+                "https://rest.uniprot.org/uniprotkb/search",
+                params={"query": query, "fields": fields, "format": "tsv", "size": len(chunk)},
+                timeout=20,
+            )
+            resp.raise_for_status()
+            if not resp.text.strip():
+                continue
+            df = pd.read_csv(io.StringIO(resp.text), sep="\t").fillna("")
+            for _, row in df.iterrows():
+                AFDB_UNIPROT_CACHE[str(row.get("Entry", ""))] = {
+                    "entry_name": str(row.get("Entry Name", "")),
+                    "protein_name": str(row.get("Protein names", "")),
+                    "organism": str(row.get("Organism", "")),
+                    "gene_names": str(row.get("Gene Names", "")),
+                    "reviewed": str(row.get("Reviewed", "")),
+                    "length": str(row.get("Length", "")),
+                }
+        except Exception as exc:
+            logger.warning("UniProt AFDB metadata lookup failed for %d accessions: %s", len(chunk), exc)
+            continue
+
+    return {a: AFDB_UNIPROT_CACHE.get(a, {}) for a in accessions}
+
+
+def _enrich_afdb_display_matches(matches: List[Dict[str, Any]]) -> None:
+    """In-place UniProt metadata enrichment for displayed AFDB rows."""
+    accessions = [m.get("lookup_entry", "") for m in matches]
+    meta = _fetch_uniprot_metadata(accessions)
+    for m in matches:
+        acc = m.get("lookup_entry", "")
+        info = meta.get(acc) or {}
+        if info.get("protein_name"):
+            m["lookup_protein_names"] = info["protein_name"]
+        if info.get("organism"):
+            m["lookup_organism"] = info["organism"]
+        if info.get("entry_name"):
+            m["lookup_entry_name"] = info["entry_name"]
+        if info.get("gene_names"):
+            m["lookup_gene_names"] = info["gene_names"]
+        if info.get("reviewed"):
+            m["lookup_reviewed"] = info["reviewed"]
+        if info.get("length"):
+            m["lookup_length"] = info["length"]
+
+
 def _format_results_display_df(results_df: pd.DataFrame, database_type: str = "Swiss-Prot") -> pd.DataFrame:
     """Build the user-facing results table with database-aware columns.
 
@@ -417,11 +495,30 @@ def _format_results_display_df(results_df: pd.DataFrame, database_type: str = "S
             "prob_partial": "Partial Prob",
         }
         if is_scope:
-            display_header_map["lookup_entry"] = "SCOPe Domain"
-            preferred_order = ["query_meta", "lookup_entry", "prob_exact", "prob_partial"]
+            display_header_map.update({
+                "lookup_entry": "SCOPe Domain",
+                "lookup_sccs": "SCCS",
+                "lookup_fold": "Fold",
+                "lookup_superfamily": "Superfamily",
+                "lookup_family": "Family",
+            })
+            preferred_order = [
+                "query_meta", "lookup_entry", "lookup_sccs", "lookup_fold",
+                "lookup_superfamily", "lookup_family", "prob_exact", "prob_partial",
+            ]
         elif is_afdb:
-            display_header_map["lookup_entry"] = "AFDB / UniProt Accession"
-            preferred_order = ["query_meta", "lookup_entry", "prob_exact", "prob_partial"]
+            display_header_map.update({
+                "lookup_entry": "AFDB / UniProt Accession",
+                "lookup_cluster_members": "Cluster Size",
+                "lookup_rep_plddt": "Rep pLDDT",
+                "lookup_avg_plddt": "Avg pLDDT",
+                "lookup_lca_taxid": "LCA Tax ID",
+            })
+            preferred_order = [
+                "query_meta", "lookup_entry", "lookup_cluster_members",
+                "lookup_rep_plddt", "lookup_avg_plddt", "lookup_lca_taxid",
+                "prob_exact", "prob_partial",
+            ]
         elif is_euk:
             preferred_order = ["query_meta", "lookup_entry", "lookup_protein_names", "lookup_organism", "prob_exact", "prob_partial"]
         else:
@@ -929,8 +1026,23 @@ def run_search(query_embeddings: np.ndarray,
                     result["lookup_entry"] = _meta_get(meta_row, "Entry", "Accession", "Protein ID")
                     result["lookup_pfam"] = _meta_get(meta_row, "Pfam")
                     result["lookup_protein_names"] = _meta_get(meta_row, "Protein names", "Description", "Name", "Annotation")
-                    result["lookup_organism"] = _meta_get(meta_row, "Organism", "Source", "Sample")
+                    result["lookup_organism"] = _meta_get(meta_row, "Organism", "Source", "Sample", "Species")
                     result["lookup_meta"] = _metadata_summary(meta_row)
+                    result["lookup_scope_sid"] = _meta_get(meta_row, "SCOPe SID")
+                    result["lookup_sccs"] = _meta_get(meta_row, "SCCS")
+                    result["lookup_class"] = _meta_get(meta_row, "Class")
+                    result["lookup_fold"] = _meta_get(meta_row, "Fold")
+                    result["lookup_superfamily"] = _meta_get(meta_row, "Superfamily")
+                    result["lookup_family"] = _meta_get(meta_row, "Family")
+                    result["lookup_pdb"] = _meta_get(meta_row, "PDB")
+                    result["lookup_chain"] = _meta_get(meta_row, "Chain")
+                    result["lookup_cluster_members"] = _meta_get(meta_row, "Cluster members")
+                    result["lookup_rep_len"] = _meta_get(meta_row, "Representative length")
+                    result["lookup_avg_len"] = _meta_get(meta_row, "Average length")
+                    result["lookup_rep_plddt"] = _meta_get(meta_row, "Representative pLDDT")
+                    result["lookup_avg_plddt"] = _meta_get(meta_row, "Average pLDDT")
+                    result["lookup_lca_taxid"] = _meta_get(meta_row, "LCA tax ID")
+                    result["lookup_is_dark"] = _meta_get(meta_row, "isDark")
                 else:
                     meta = str(lookup_meta[idx]).lstrip(">")
                     result["lookup_meta"] = meta
@@ -2566,6 +2678,14 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                     parts.append(f"{entry_label}: {m['lookup_entry']}")
                     if database_type == "AFDB (Clustered)":
                         parts.append(f"AlphaFold DB: https://alphafold.ebi.ac.uk/entry/{m['lookup_entry']}")
+                        if m.get("lookup_cluster_members"):
+                            parts.append(f"Cluster Size: {m['lookup_cluster_members']}")
+                        if m.get("lookup_rep_plddt"):
+                            parts.append(f"Representative pLDDT: {m['lookup_rep_plddt']}")
+                        if m.get("lookup_avg_plddt"):
+                            parts.append(f"Average Cluster pLDDT: {m['lookup_avg_plddt']}")
+                        if m.get("lookup_lca_taxid"):
+                            parts.append(f"LCA Tax ID: {m['lookup_lca_taxid']}")
                 if m.get("lookup_organism"):
                     parts.append(f"Organism / Source: {m['lookup_organism']}")
                 if m.get("lookup_pfam"):
