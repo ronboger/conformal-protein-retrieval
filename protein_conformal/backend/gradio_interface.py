@@ -447,8 +447,9 @@ def _enrich_afdb_display_matches(matches: List[Dict[str, Any]]) -> None:
     for m in matches:
         acc = m.get("lookup_entry", "")
         info = meta.get(acc) or {}
-        if info.get("protein_name"):
-            m["lookup_protein_names"] = info["protein_name"]
+        protein_name = info.get("protein_name", "").strip()
+        if protein_name and protein_name.lower() != "deleted":
+            m["lookup_protein_names"] = protein_name
         if info.get("organism"):
             m["lookup_organism"] = info["organism"]
         if info.get("entry_name"):
@@ -1031,7 +1032,10 @@ def run_search(query_embeddings: np.ndarray,
                     meta_row = lookup_meta[idx]
                     result["lookup_entry"] = _meta_get(meta_row, "Entry", "Accession", "Protein ID")
                     result["lookup_pfam"] = _meta_get(meta_row, "Pfam")
-                    result["lookup_protein_names"] = _meta_get(meta_row, "Protein names", "Description", "Name", "Annotation")
+                    # Do not treat generic metadata Description as a protein name.
+                    # For AFDB enriched metadata, Description is a synthetic cluster
+                    # summary; real names are added later via optional UniProt lookup.
+                    result["lookup_protein_names"] = _meta_get(meta_row, "Protein names", "Name", "Annotation")
                     result["lookup_organism"] = _meta_get(meta_row, "Organism", "Source", "Sample", "Species")
                     result["lookup_meta"] = _metadata_summary(meta_row)
                     result["lookup_scope_sid"] = _meta_get(meta_row, "SCOPe SID")
