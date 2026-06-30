@@ -25,6 +25,45 @@ VOL_DATA = f"{VOLUME_PATH}/data"
 HF_DATASET_ID = os.getenv("HF_DATASET_ID", "LoocasGoose/cpr_data")
 dataset_config_secret = modal.Secret.from_dict({"HF_DATASET_ID": HF_DATASET_ID})
 
+
+def _rewrite_social_preview_html(html: str, base_url: str) -> str:
+    """Remove Gradio's default Open Graph/Twitter preview tags and insert ours.
+
+    Gradio emits tags like og:title=Gradio and og:description=Click to try out
+    the app before custom head content. Link unfurlers usually read the first
+    tags, so on Modal we rewrite the HTML response server-side.
+    """
+    import re
+
+    # Remove Gradio/default social preview tags, plus duplicate custom tags that
+    # Gradio may emit later with blank descriptions.
+    patterns = [
+        r'<meta\s+(?:property|name)=["\'](?:og:title|og:description|og:image|og:url|twitter:title|twitter:description|twitter:image|twitter:creator)["\'][^>]*>\s*',
+        r'<meta\s+[^>]*(?:property|name)=["\'](?:og:title|og:description|og:image|og:url|twitter:title|twitter:description|twitter:image|twitter:creator)["\'][^>]*>\s*',
+    ]
+    for pattern in patterns:
+        html = re.sub(pattern, "", html, flags=re.IGNORECASE)
+
+    base = base_url.rstrip("/")
+    image = f"{base}/favicon.ico"
+    title = "Conformal Protein Retrieval"
+    desc = "Functional protein mining with statistical guarantees."
+    tags = f"""
+<title>{title}</title>
+<meta property="og:title" content="{title}">
+<meta property="og:description" content="{desc}">
+<meta property="og:type" content="website">
+<meta property="og:image" content="{image}">
+<meta name="twitter:title" content="{title}">
+<meta name="twitter:description" content="{desc}">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="{image}">
+"""
+    if "<head>" in html:
+        return html.replace("<head>", "<head>" + tags, 1)
+    return tags + html
+
+
 # ---------------------------------------------------------------------------
 # Container images
 # ---------------------------------------------------------------------------
@@ -391,7 +430,7 @@ def ui():
     import sys
     import logging
     import numpy as np
-    from fastapi import FastAPI
+    from fastapi import FastAPI, Response
     from gradio.routes import mount_gradio_app
 
     # Surface StageTimer (gradio_interface logs per-stage durations at INFO) in
@@ -482,8 +521,30 @@ def ui():
     demo = create_interface(embed_fn=gpu_embed, clean_embed_fn=gpu_embed_clean)
     demo.queue(max_size=10, default_concurrency_limit=5)
 
+    fastapi_app = FastAPI()
+
+    @fastapi_app.middleware("http")
+    async def social_preview_middleware(request, call_next):
+        response = await call_next(request)
+        content_type = response.headers.get("content-type", "")
+        if request.url.path == "/" and "text/html" in content_type:
+            body = b""
+            async for chunk in response.body_iterator:
+                body += chunk
+            html = body.decode("utf-8", errors="replace")
+            html = _rewrite_social_preview_html(html, str(request.base_url))
+            headers = dict(response.headers)
+            headers.pop("content-length", None)
+            return Response(
+                content=html,
+                status_code=response.status_code,
+                headers=headers,
+                media_type="text/html",
+            )
+        return response
+
     return mount_gradio_app(
-        app=FastAPI(),
+        app=fastapi_app,
         blocks=demo,
         path="/",
         footer_links=[],
