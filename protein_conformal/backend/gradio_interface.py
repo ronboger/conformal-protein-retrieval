@@ -579,6 +579,7 @@ def process_clean_input(
     alpha_value: float,
     session: Optional[dict] = None,
     progress=None,
+    clean_embed_fn=None,
 ) -> Tuple[str, pd.DataFrame, dict]:
     """Process input for CLEAN enzyme classification mode.
 
@@ -609,7 +610,8 @@ def process_clean_input(
         # Step 2: Embed with CLEAN (ESM-1b + LayerNormNet)
         progress(0.1, desc="Embedding with ESM-1b + CLEAN...")
         with stage_timer.track("clean_embedding"):
-            embeddings = run_embed_clean(sequences, progress)
+            embed_clean = clean_embed_fn or run_embed_clean
+            embeddings = embed_clean(sequences, progress)
 
         # Step 3: Load CLEAN resources and search
         progress(0.5, desc="Searching EC centroid database...")
@@ -855,7 +857,8 @@ def process_input(input_text: str,
                   fp16_head: bool = False,
                   embedding_device: str = "cpu",
                   session: Optional[dict] = None,
-                  progress=None) -> Tuple[str, pd.DataFrame, dict]:
+                  progress=None,
+                  embed_fn=None) -> Tuple[str, pd.DataFrame, dict]:
     """Wrapper that instruments the main pipeline with timing information.
 
     ``session`` carries this user's prior state (used for embedding/FAISS cache
@@ -887,6 +890,7 @@ def process_input(input_text: str,
             embedding_device,
             session,
             progress,
+            embed_fn,
         )
         # Surface total search wall-time in the summary the user sees.
         if isinstance(summary, dict):
@@ -915,7 +919,8 @@ def _process_input_impl(stage_timer: StageTimer,
                         fp16_head: bool = False,
                         embedding_device: str = "cpu",
                         session: Optional[dict] = None,
-                        progress=None) -> Tuple[Dict[str, Any], pd.DataFrame, dict]:
+                        progress=None,
+                        embed_fn=None) -> Tuple[Dict[str, Any], pd.DataFrame, dict]:
     """
     Process the input and generate predictions.
     
@@ -1007,20 +1012,19 @@ def _process_input_impl(stage_timer: StageTimer,
                 logger.info("Process-level embedding cache hit for %d sequences", len(sequences))
             else:
                 with stage_timer.track("protein_vec_embedding"):
-                    # Public Modal deployments monkey-patch run_embed_protein_vec
-                    # with gpu_embed(sequences, progress=None, fp16_head=False),
-                    # which should continue to use the Modal GPU path. Only pass
-                    # embedding_device when an explicitly non-default local device
-                    # is requested by developer-only code.
-                    if embedding_device and embedding_device != "cpu":
-                        embeddings = run_embed_protein_vec(
+                    embed = embed_fn or run_embed_protein_vec
+                    # Modal passes gpu_embed(sequences, progress=None, fp16_head=False)
+                    # explicitly into create_interface(). The local subprocess fallback
+                    # accepts embedding_device for developer-only CPU/MPS/CUDA testing.
+                    if embedding_device and embedding_device != "cpu" and embed is run_embed_protein_vec:
+                        embeddings = embed(
                             sequences,
                             progress,
                             fp16_head=fp16_head,
                             embedding_device=embedding_device,
                         )
                     else:
-                        embeddings = run_embed_protein_vec(
+                        embeddings = embed(
                             sequences,
                             progress,
                             fp16_head=fp16_head,
@@ -1569,13 +1573,21 @@ def _setup_status_html():
     )
 
 
-def create_interface():
+def create_interface(embed_fn=None, clean_embed_fn=None):
     """
-    Create and configure the Gradio interface for protein conformal prediction
+    Create and configure the Gradio interface for protein conformal prediction.
+
+    Args:
+        embed_fn: Optional Protein-Vec embedding callable. Public Modal deploys
+            pass a GPU-backed function here; local runs use run_embed_protein_vec.
+        clean_embed_fn: Optional CLEAN embedding callable. Modal deploys pass a
+            GPU-backed function here; local runs use run_embed_clean.
 
     Returns:
         Gradio interface object
     """
+    embed_fn = embed_fn or run_embed_protein_vec
+    clean_embed_fn = clean_embed_fn or run_embed_clean
     # Custom CSS for better styling
     custom_css = """
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
@@ -2159,6 +2171,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                 summary_json, df, session = process_clean_input(
                     fasta, upload, float(c_alpha), session=session,
                     progress=progress,
+                    clean_embed_fn=clean_embed_fn,
                 )
                 # Build per-query dropdown
                 if not df.empty and "Query" in df.columns:
@@ -2196,6 +2209,7 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
                     use_pv, custom_emb, lookup, metadata, custom_lookup, custom_meta,
                     m_type, min_prob, fp16_head=fp16_head, session=session,
                     progress=progress,
+                    embed_fn=embed_fn,
                 )
                 # Apply hide-uncharacterized filter
                 if hide_unc and not df.empty and "Protein Name(s)" in df.columns:

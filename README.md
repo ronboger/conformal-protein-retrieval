@@ -110,7 +110,7 @@ The app disables Gradio's generated OpenAPI/Swagger docs and footer links by def
 
 ### Embedding device notes
 
-For the public/server deployment in `modal_app.py`, query embedding is offloaded to Modal GPU workers (`gi.run_embed_protein_vec = gpu_embed`). The Gradio UI does not expose a CPU/MPS/CUDA selector; users should simply run searches through the site.
+For the public/server deployment in `modal_app.py`, query embedding is offloaded to Modal GPU workers by passing GPU-backed embedding functions into `create_interface(embed_fn=..., clean_embed_fn=...)`. The Gradio UI does not expose a CPU/MPS/CUDA selector; users should simply run searches through the site.
 
 For local debugging on a Mac or workstation, the standalone embedding script supports an opt-in device flag:
 

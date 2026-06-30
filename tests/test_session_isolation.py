@@ -325,9 +325,9 @@ def _mock_run_search_long(embeddings, query_seqs, query_meta, lookup_db=None,
     return pd.DataFrame(rows)
 
 
-def test_match_sequence_truncated_in_display():
-    """The displayed Match Sequence cell is truncated, but the session keeps the
-    full sequence (for the detail panel) and Query is left intact (for filtering)."""
+def test_match_sequence_hidden_from_table_but_preserved_in_session():
+    """Long match sequences are hidden from the main table, but the session keeps
+    the full sequence for the detail panel and Query is left intact for filtering."""
     import protein_conformal.backend.gradio_interface as gi
 
     def embed(seqs, progress=None, fp16_head=False):
@@ -343,13 +343,9 @@ def test_match_sequence_truncated_in_display():
             None, None, "Exact", 0.5, session={}, progress=MagicMock(),
         )
 
-    limit = gi.RESULTS_DISPLAY_TRUNCATE["Match Sequence"]
-    cells = df["Match Sequence"].tolist()
-    assert cells, "expected at least one row"
-    # Displayed cell is short and elided — cannot blow up the row.
-    assert all(len(c) <= limit + 1 for c in cells)
-    assert all(c.endswith("…") for c in cells)
-    assert all(LONG_SEQ not in c for c in cells)
+    assert "Match Sequence" not in df.columns
+    assert "Match Description" not in df.columns
+    assert not df.empty, "expected at least one displayed row"
     # Full sequence preserved in the session (detail panel reads from here).
     assert session["results"]["matches"][0]["lookup_seq"] == LONG_SEQ
     # Query column left untruncated so the per-query dropdown still matches the

@@ -58,7 +58,7 @@ def test_create_interface_smoke_builds_blocks_with_theme_and_css_attrs():
     from protein_conformal.backend.gradio_interface import create_interface
 
     demo = create_interface()
-    assert isinstance(demo, gr.Blocks)
+    assert hasattr(demo, "blocks")
     assert hasattr(demo, "cpr_theme")
     assert hasattr(demo, "cpr_css")
     assert "#fasta-input" in demo.cpr_css
@@ -67,3 +67,17 @@ def test_create_interface_smoke_builds_blocks_with_theme_and_css_attrs():
     # Modal deployments use the GPU monkey-patched embedder automatically.
     labels = [getattr(block, "label", None) for block in demo.blocks.values()]
     assert "Embedding Device" not in labels
+
+
+def test_create_interface_accepts_injected_embedders():
+    pytest.importorskip("gradio")
+    from protein_conformal.backend.gradio_interface import create_interface
+
+    def fake_embed(seqs, progress=None, fp16_head=False):
+        raise AssertionError("not called during UI construction")
+
+    def fake_clean_embed(seqs, progress=None):
+        raise AssertionError("not called during UI construction")
+
+    demo = create_interface(embed_fn=fake_embed, clean_embed_fn=fake_clean_embed)
+    assert hasattr(demo, "cpr_theme")

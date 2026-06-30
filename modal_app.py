@@ -422,9 +422,8 @@ def ui():
         if os.path.exists(src) and not os.path.exists(dst):
             shutil.copy2(src, dst)
 
-    # Monkey-patch the embedding function to use the GPU Embedder
-    import protein_conformal.backend.gradio_interface as gi
-
+    # GPU embedding functions are passed explicitly into create_interface()
+    # below. Local runs keep the default subprocess/CPU embedder.
     GPU_TIMEOUT = 600  # seconds — headroom for up to MAX_QUERY_SEQUENCES on A10G;
                        # still fails loudly rather than hanging forever (matches cls timeout)
 
@@ -462,8 +461,6 @@ def ui():
             progress(0.9, desc="Embeddings received from GPU!")
         return arr
 
-    gi.run_embed_protein_vec = gpu_embed
-
     def gpu_embed_clean(sequences, progress=None):
         """Call Modal GPU function for CLEAN enzyme embedding."""
         if progress:
@@ -478,12 +475,10 @@ def ui():
             progress(0.9, desc="CLEAN embeddings received from GPU!")
         return np.array(result, dtype=np.float32)
 
-    gi.run_embed_clean = gpu_embed_clean
-
-    # Create and serve the Gradio interface
+    # Create and serve the Gradio interface with explicit GPU-backed embedders.
     from protein_conformal.backend.gradio_interface import create_interface
 
-    demo = create_interface()
+    demo = create_interface(embed_fn=gpu_embed, clean_embed_fn=gpu_embed_clean)
     demo.queue(max_size=10, default_concurrency_limit=5)
 
     return mount_gradio_app(app=FastAPI(), blocks=demo, path="/")
