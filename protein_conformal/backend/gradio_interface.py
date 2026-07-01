@@ -57,6 +57,16 @@ RESULTS_DISPLAY_TRUNCATE = {
     "Match Sequence": 30,
     "Match Description": 45,
     "Protein Name(s)": 45,
+    "Protein Name": 45,
+    "Description": 45,
+    "Metadata": 45,
+    "Organism": 40,
+    "Organism / Source": 40,
+    "Pfam": 45,
+    "SCCS": 35,
+    "Fold": 40,
+    "Superfamily": 35,
+    "Family": 35,
 }
 
 
@@ -388,45 +398,104 @@ def _metadata_summary(meta_row: Any) -> str:
 
 
 AFDB_CLUSTER_API_CACHE: Dict[str, Dict[str, Any]] = {}
+AFDB_CLUSTER_CACHE_DB = "./data/afdb/afdb_cluster_metadata_cache.sqlite"
+
+
+def _load_afdb_cluster_cache(accessions: List[str]) -> Dict[str, Dict[str, Any]]:
+    """Load cached AFDB cluster metadata from the local/Modal volume SQLite DB."""
+    import json
+    import sqlite3
+
+    result: Dict[str, Dict[str, Any]] = {}
+    if not accessions or not os.path.exists(AFDB_CLUSTER_CACHE_DB):
+        return result
+    try:
+        conn = sqlite3.connect(AFDB_CLUSTER_CACHE_DB, timeout=2)
+        try:
+            placeholders = ",".join("?" for _ in accessions)
+            rows = conn.execute(
+                f"SELECT accession, payload FROM afdb_cluster_metadata WHERE accession IN ({placeholders})",
+                list(accessions),
+            ).fetchall()
+        finally:
+            conn.close()
+        for acc, payload in rows:
+            try:
+                result[acc] = json.loads(payload)
+            except Exception:
+                continue
+    except Exception as exc:
+        logger.debug("AFDB cluster SQLite cache read failed: %s", exc)
+    return result
+
+
+def _save_afdb_cluster_cache(items: Dict[str, Dict[str, Any]]) -> None:
+    """Persist AFDB cluster metadata to the local/Modal volume SQLite DB."""
+    import json
+    import sqlite3
+
+    if not items:
+        return
+    try:
+        os.makedirs(os.path.dirname(AFDB_CLUSTER_CACHE_DB), exist_ok=True)
+        conn = sqlite3.connect(AFDB_CLUSTER_CACHE_DB, timeout=5)
+        try:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS afdb_cluster_metadata "
+                "(accession TEXT PRIMARY KEY, payload TEXT NOT NULL)"
+            )
+            conn.executemany(
+                "INSERT OR REPLACE INTO afdb_cluster_metadata(accession, payload) VALUES (?, ?)",
+                [(acc, json.dumps(payload, sort_keys=True)) for acc, payload in items.items()],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.debug("AFDB cluster SQLite cache write failed: %s", exc)
 
 
 def _fetch_afdb_cluster_metadata(accessions: List[str], max_workers: int = 12) -> Dict[str, Dict[str, Any]]:
-    """Fetch display metadata from the AFDB Cluster API for visible AFDB hits.
+    """Fetch display metadata from AFDB Cluster, using a persistent local cache.
 
     The AFDB cluster TSV gives reliable cluster metrics for all 2.3M representatives,
     but the interactive AFDB cluster site exposes more helpful display metadata like
-    protein description and taxonomic names. Query only displayed hits and cache them.
+    protein description and taxonomic names. Query only displayed hits and cache them
+    on the Modal volume so repeated searches are local.
     """
-    wanted = []
-    for acc in dict.fromkeys(a for a in accessions if a):
-        if acc not in AFDB_CLUSTER_API_CACHE:
-            wanted.append(acc)
+    accessions = list(dict.fromkeys(a for a in accessions if a))
+
+    # Populate memory cache from persistent SQLite before making network requests.
+    missing_from_mem = [acc for acc in accessions if acc not in AFDB_CLUSTER_API_CACHE]
+    if missing_from_mem:
+        AFDB_CLUSTER_API_CACHE.update(_load_afdb_cluster_cache(missing_from_mem))
+
+    wanted = [acc for acc in accessions if acc not in AFDB_CLUSTER_API_CACHE]
     if not wanted:
         return {a: AFDB_CLUSTER_API_CACHE.get(a, {}) for a in accessions}
 
-    try:
-        import requests
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-    except Exception:
-        return {a: AFDB_CLUSTER_API_CACHE.get(a, {}) for a in accessions}
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import json
+    import urllib.error
+    import urllib.request
 
-    session = requests.Session()
+    def _get_json(url: str):
+        req = urllib.request.Request(url, headers={"User-Agent": "cpr-gradio/1.0"})
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            return json.loads(resp.read().decode("utf-8"))
 
     def fetch_one(acc: str) -> tuple[str, Dict[str, Any]]:
         try:
             # Most rows in our clustered AFDB are representatives, so /cluster/<acc>
             # is usually enough. If not, /api/<acc> maps member -> representative.
-            r = session.get(f"https://cluster.foldseek.com/api/cluster/{acc}", timeout=12)
-            if r.status_code == 404:
-                lookup = session.get(f"https://cluster.foldseek.com/api/{acc}", timeout=12)
-                lookup.raise_for_status()
-                arr = lookup.json()
-                if arr:
-                    rep = arr[0].get("rep_accession")
-                    if rep:
-                        r = session.get(f"https://cluster.foldseek.com/api/cluster/{rep}", timeout=12)
-            r.raise_for_status()
-            d = r.json()
+            try:
+                d = _get_json(f"https://cluster.foldseek.com/api/cluster/{acc}")
+            except urllib.error.HTTPError as err:
+                if err.code != 404:
+                    raise
+                arr = _get_json(f"https://cluster.foldseek.com/api/{acc}")
+                rep = arr[0].get("rep_accession") if arr else None
+                d = _get_json(f"https://cluster.foldseek.com/api/cluster/{rep}") if rep else {}
             tax = d.get("tax_id") or {}
             lca = d.get("lca_tax_id") or {}
             return acc, {
@@ -449,11 +518,15 @@ def _fetch_afdb_cluster_metadata(accessions: List[str], max_workers: int = 12) -
             logger.debug("AFDB cluster API metadata lookup failed for %s: %s", acc, exc)
             return acc, {}
 
+    newly_fetched: Dict[str, Dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = [ex.submit(fetch_one, acc) for acc in wanted]
         for fut in as_completed(futures):
             acc, info = fut.result()
             AFDB_CLUSTER_API_CACHE[acc] = info
+            if info:
+                newly_fetched[acc] = info
+    _save_afdb_cluster_cache(newly_fetched)
 
     return {a: AFDB_CLUSTER_API_CACHE.get(a, {}) for a in accessions}
 
@@ -1836,12 +1909,43 @@ def create_interface(embed_fn=None, clean_embed_fn=None):
         background: transparent !important;
     }
 
-    /* Keep inline dataframe editor compact: no row blow-up on long cell values. */
-    #results-table textarea,
-    #results-table [contenteditable="true"] {
+    /* Keep the results table compact: selected long cells should not resize rows. */
+    #results-table table,
+    #results-table .dataframe,
+    #results-table .handsontable {
+        table-layout: fixed !important;
+    }
+    #results-table tr,
+    #results-table th,
+    #results-table td,
+    #results-table .htCore tr,
+    #results-table .htCore th,
+    #results-table .htCore td,
+    #results-table [role="row"],
+    #results-table [role="gridcell"],
+    #results-table [role="columnheader"] {
+        height: 32px !important;
+        max-height: 32px !important;
+        line-height: 18px !important;
         white-space: nowrap !important;
-        overflow-x: auto !important;
-        overflow-y: hidden !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        vertical-align: middle !important;
+    }
+    #results-table td *,
+    #results-table .htCore td *,
+    #results-table [role="gridcell"] * {
+        max-height: 24px !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+    }
+    #results-table textarea,
+    #results-table [contenteditable="true"],
+    .handsontableInput,
+    .handsontableInputHolder {
+        white-space: nowrap !important;
+        overflow: hidden !important;
         line-height: 1.35 !important;
         min-height: 2.1em !important;
         max-height: 2.1em !important;

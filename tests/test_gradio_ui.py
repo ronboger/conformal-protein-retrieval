@@ -124,3 +124,18 @@ def test_results_display_df_is_database_aware():
 
     scope = _format_results_display_df(raw.assign(lookup_meta=">d1abcA SCOPe domain", lookup_entry="d1abcA"), "SCOPE")
     assert list(scope.columns) == ["Query", "SCOPe Domain", "Exact Prob", "Partial Prob"]
+
+    long_scope = _format_results_display_df(
+        raw.assign(
+            lookup_entry="4ogcA",
+            lookup_sccs="c.55.3.16; d.4.1.8; d.393.1.1; e.79.1.1",
+            lookup_fold="Ribonuclease H-like domain fold with a very long label",
+            lookup_superfamily="Ribonuclease H-like domain superfamily label",
+            lookup_family="RuvC-like domain family with extended text",
+        ),
+        "SCOPE",
+    )
+    assert long_scope.loc[0, "SCCS"].endswith("…")
+    assert long_scope.loc[0, "Fold"].endswith("…")
+    assert long_scope.loc[0, "Superfamily"].endswith("…")
+    assert long_scope.loc[0, "Family"].endswith("…")
