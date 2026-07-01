@@ -638,7 +638,11 @@ def _format_results_display_df(results_df: pd.DataFrame, database_type: str = "S
         hidden_cols.add("lookup_pfam")
 
     display_columns = [col for col in preferred_order if col in results_df.columns and col not in hidden_cols]
-    display_columns.extend([col for col in results_df.columns if col not in display_columns and col not in hidden_cols])
+    # For known databases, keep the table schema explicit and stable. Raw metadata
+    # is still preserved in session/export/detail panels. Only Custom databases get
+    # extra non-hidden columns appended because their schema is unknown.
+    if not (is_swiss or is_scope or is_afdb or is_euk):
+        display_columns.extend([col for col in results_df.columns if col not in display_columns and col not in hidden_cols])
     display_df = results_df.reindex(columns=display_columns).copy()
 
     # Hide columns that are empty for almost all rows (metadata-sparse DBs).
