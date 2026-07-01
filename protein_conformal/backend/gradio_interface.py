@@ -43,8 +43,11 @@ except Exception:
     DATAFRAME_SUPPORTS_STATIC_COLUMNS = False
 
 # Preferred display widths (in px) for default visible columns:
-# Query, UniProt Entry, Protein Name(s), Pfam, Exact Prob, Partial Prob
-RESULTS_TABLE_COLUMN_WIDTHS = [280, 120, 260, 180, 115, 115]
+# Preferred display widths (px). The list is long enough for the widest schema
+# (AFDB); extra widths are ignored for narrower database-specific tables.
+# Query, ID/accession, description/name, organism/source or domains, cluster/aux,
+# pLDDT/aux, pLDDT/aux, Exact Prob, Partial Prob
+RESULTS_TABLE_COLUMN_WIDTHS = [210, 150, 300, 220, 140, 125, 125, 145, 145]
 
 # Hard char limits for long display columns (keyed by display header). Truncating
 # the data itself guarantees a cell can't blow up the row height when clicked —
@@ -2706,10 +2709,30 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
         display_to_match_key = {
             "Query": "query_meta",
             "Match Sequence": "lookup_seq",
+            # ID/accession columns across database-specific display schemas.
             "UniProt Entry": "lookup_entry",
+            "Match ID": "lookup_entry",
+            "AFDB / UniProt Accession": "lookup_entry",
+            "SCOPe Domain": "lookup_entry",
+            # Description/name columns.
             "Protein Name(s)": "lookup_protein_names",
+            "Protein Name": "lookup_protein_names",
+            "Description": "lookup_protein_names",
+            "Organism": "lookup_organism",
+            "Organism / Source": "lookup_organism",
+            # Domain/classification columns.
             "Pfam": "lookup_pfam",
             "Match Description": "lookup_meta",
+            "Metadata": "lookup_meta",
+            "SCCS": "lookup_sccs",
+            "Fold": "lookup_fold",
+            "Superfamily": "lookup_superfamily",
+            "Family": "lookup_family",
+            # AFDB cluster columns.
+            "Cluster Size": "lookup_cluster_members",
+            "Rep pLDDT": "lookup_rep_plddt",
+            "Avg pLDDT": "lookup_avg_plddt",
+            # Probability columns.
             "Exact Prob": "prob_exact",
             "Partial Prob": "prob_partial",
             "Exact Match Prob": "prob_exact",
