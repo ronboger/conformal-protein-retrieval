@@ -1580,11 +1580,12 @@ def _process_input_impl(stage_timer: StageTimer,
                 "match_type": conformal_results["match_type"],
                 "max_k": max_results,
             }
-            # Table is capped per query; tell the user the download has the rest.
+            # Table is capped per query; tell the user how to see more / get all.
             if len(display_matches) < total_matches:
                 summary["display_note"] = (
                     f"Showing {len(display_matches)} of {total_matches} matches "
-                    f"(top {DISPLAY_ROWS_PER_QUERY} per query). Use Download to get all."
+                    f"(top {DISPLAY_ROWS_PER_QUERY} per query). Increase 'Rows per query' "
+                    f"to show more, or use Download to get all."
                 )
             # Threshold >= 1.0 warning
             if not is_prob_filter and conformal_results["threshold"] >= 1.0:
@@ -2227,6 +2228,14 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                         interactive=True,
                         scale=3,
                     )
+                    rows_per_query = gr.Dropdown(
+                        choices=["200", "500", "1000", "5000", "All"],
+                        value="200",
+                        label="Rows per query",
+                        info="How many matches to show in the table (full set is always in the export).",
+                        interactive=True,
+                        scale=1,
+                    )
 
                 results_count_md = gr.HTML("", elem_id="results-count")
 
@@ -2658,7 +2667,16 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
 
 
         # Per-query filtering
-        def filter_by_query(query_choice, session):
+        def _parse_row_cap(rows_choice) -> int:
+            """Map the 'Rows per query' dropdown to an integer cap (0 = unlimited)."""
+            if rows_choice is None or str(rows_choice).strip().lower() == "all":
+                return 0
+            try:
+                return max(1, int(str(rows_choice).strip()))
+            except (TypeError, ValueError):
+                return DISPLAY_ROWS_PER_QUERY
+
+        def filter_by_query(query_choice, rows_choice, session):
             if not session or "results" not in session:
                 return pd.DataFrame(), gr.Code(visible=False, value=""), gr.Plot(visible=False), ""
             matches = session["results"].get("matches", [])
@@ -2671,9 +2689,14 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
             else:
                 filtered_matches = matches
 
+            # Apply the per-query row cap (0 = show all).
+            cap = _parse_row_cap(rows_choice)
+            if cap:
+                filtered_matches = cap_matches_per_query(filtered_matches, "query_meta", cap)
+
             database_type = (session or {}).get("parameters", {}).get("database_type", "Swiss-Prot")
             if database_type == "AFDB (Clustered)" and filtered_matches:
-                _enrich_afdb_display_matches(filtered_matches[:DISPLAY_ROWS_PER_QUERY])
+                _enrich_afdb_display_matches(filtered_matches)
             df = pd.DataFrame(filtered_matches)
             display_df = _format_results_display_df(df, database_type)
 
@@ -2701,7 +2724,13 @@ MIRDFNNQEVTLDDLEQNNNKTDKNKPKVQFLMRFSLVFSNISTHIFLFVLIVIASLFFGLRYTYYNYKVDLITNAHKIK
 
         query_filter.change(
             fn=filter_by_query,
-            inputs=[query_filter, session_state],
+            inputs=[query_filter, rows_per_query, session_state],
+            outputs=[results_table, sequence_detail, prob_plot, results_count_md],
+            show_progress="hidden",
+        )
+        rows_per_query.change(
+            fn=filter_by_query,
+            inputs=[query_filter, rows_per_query, session_state],
             outputs=[results_table, sequence_detail, prob_plot, results_count_md],
             show_progress="hidden",
         )
