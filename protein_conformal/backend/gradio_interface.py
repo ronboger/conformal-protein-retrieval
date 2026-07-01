@@ -2221,21 +2221,22 @@ MDKKYSIGLDIGTNSVGWAVITDEYKVPSKKFKVLGNTDRHSIKKNLIGALLFDSGETAEATRLKRTARRRYTRRKNRIC
                     """)
 
                 with gr.Row():
-                    query_filter = gr.Dropdown(
-                        choices=["All queries"],
-                        value="All queries",
-                        label="Filter by Query",
-                        interactive=True,
-                        scale=3,
-                    )
-                    rows_per_query = gr.Dropdown(
-                        choices=["200", "500", "1000", "5000", "All"],
-                        value="200",
-                        label="Rows per query",
-                        info="How many matches to show in the table (full set is always in the export).",
-                        interactive=True,
-                        scale=1,
-                    )
+                    with gr.Column(scale=1, min_width=280):
+                        rows_per_query = gr.Dropdown(
+                            choices=["200", "500", "1000", "5000", "All"],
+                            value="200",
+                            label="Rows per query",
+                            info="How many matches to show in the table (full set is always in the export).",
+                            interactive=True,
+                        )
+                        query_filter = gr.Dropdown(
+                            choices=["All queries"],
+                            value="All queries",
+                            label="Filter by Query",
+                            interactive=True,
+                        )
+                    with gr.Column(scale=2):
+                        pass
 
                 results_count_md = gr.HTML("", elem_id="results-count")
 
